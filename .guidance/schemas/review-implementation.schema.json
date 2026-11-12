@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "findings"
+  ],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["severity"],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low", "info"]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["fixed", "tracked", "accepted"]
+          }
+        }
+      }
+    },
+    "filesChangedDuringReview": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "testsAddedOrUpdated": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unresolvedFindings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

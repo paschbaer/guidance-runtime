@@ -1,0 +1,134 @@
+{
+  "version": 2,
+  "operations": {
+    "build": {
+      "description": "Build the Rust workspace via cargo (debug profile).",
+      "type": "process",
+      "executable": "cargo",
+      "args": [
+        "build"
+      ],
+      "required": true,
+      "timeoutSeconds": 900,
+      "riskClass": "workspace_write",
+      "validation": {
+        "protocolRequestMustSucceed": true,
+        "exitCodeMustBeZero": true
+      },
+      "output": {
+        "returnToAgent": "summary_and_errors",
+        "retainRawResult": true
+      }
+    },
+    "lint": {
+      "description": "Lint the Rust workspace via clippy (deny warnings).",
+      "type": "process",
+      "executable": "cargo",
+      "args": [
+        "clippy",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "required": false,
+      "timeoutSeconds": 600,
+      "riskClass": "workspace_write",
+      "validation": {
+        "protocolRequestMustSucceed": true,
+        "exitCodeMustBeZero": true
+      },
+      "output": {
+        "returnToAgent": "summary_and_errors",
+        "retainRawResult": true
+      }
+    },
+    "test": {
+      "description": "Run the Rust test suite via cargo test.",
+      "type": "process",
+      "executable": "cargo",
+      "args": [
+        "test"
+      ],
+      "required": false,
+      "timeoutSeconds": 900,
+      "riskClass": "workspace_write",
+      "validation": {
+        "protocolRequestMustSucceed": true,
+        "exitCodeMustBeZero": true
+      },
+      "output": {
+        "returnToAgent": "summary_and_errors",
+        "retainRawResult": true
+      }
+    },
+    "deps-install": {
+      "description": "Fetch the Rust crate dependencies into the local cargo cache (offline-capable afterwards). Runs in the workspace root. riskClass workspace_write (subject to policies.approvals — default: allowed for unattended operation), exposure-filtered output (specs/015 FR-1211).",
+      "type": "process",
+      "executable": "cargo",
+      "args": [
+        "fetch"
+      ],
+      "required": false,
+      "invocableByAgent": true,
+      "timeoutSeconds": 600,
+      "riskClass": "workspace_write",
+      "validation": {
+        "protocolRequestMustSucceed": true,
+        "exitCodeMustBeZero": true
+      },
+      "output": {
+        "returnToAgent": "summary_and_errors",
+        "retainRawResult": true
+      }
+    },
+    "deps-reinstall": {
+      "description": "Reset the Rust build state: cargo clean removes target/ (the next build re-fetches and recompiles from scratch — use for corrupted incremental state or toolchain/ABI mismatches). Platform note: spawns cargo directly (no shell). riskClass workspace_write (subject to policies.approvals — default: allowed for unattended operation), exposure-filtered output (specs/015 FR-1212).",
+      "type": "process",
+      "executable": "cargo",
+      "args": [
+        "clean"
+      ],
+      "required": false,
+      "invocableByAgent": true,
+      "timeoutSeconds": 300,
+      "riskClass": "workspace_write",
+      "validation": {
+        "protocolRequestMustSucceed": true,
+        "exitCodeMustBeZero": true
+      },
+      "output": {
+        "returnToAgent": "summary_and_errors",
+        "retainRawResult": true
+      }
+    },
+    "capture-session-lessons": {
+      "description": "Seed validated session lessons. The agent writes .guidance/state/session-lessons.json BEFORE calling complete_workflow ([{slug, observation, cause, fix}]; empty array = explicit no-op success; a MISSING file FAILS the gate — the lessons review step must not be skipped; redact secrets — the script bypasses Guidance pattern redaction). Idempotent per slug. Note: runs node directly (no shell indirection); node is resolved via PATH first, then the workspace venv (.venv/bin, .venv/Scripts). Deployment values live in the env map (127.0.0.1 for containerized EMMS deployments).",
+      "type": "process",
+      "executable": "node",
+      "args": [
+        ".guidance/scripts/seed-lessons.mjs",
+        ".guidance/state/session-lessons.json"
+      ],
+      "env": {
+        "EMMS_HTTP_URL": "http://127.0.0.1:3002/mcp",
+        "EMMS_LESSON_SCOPE": "guidance-runtime-lessons"
+      },
+      "required": false,
+      "timeoutSeconds": 120,
+      "riskClass": "external_write",
+      "validation": {
+        "protocolRequestMustSucceed": true,
+        "exitCodeMustBeZero": true
+      },
+      "output": {
+        "returnToAgent": "summary_and_errors",
+        "retainRawResult": true
+      },
+      "failure": {
+        "remainInPhase": true,
+        "allowManualRetry": true,
+        "reportToAgent": true
+      }
+    }
+  }
+}

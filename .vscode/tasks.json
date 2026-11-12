@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Post-commit review",
+      "type": "shell",
+      "command": "copilot",
+      "args": ["-p", "Execute the prompt file .github/prompts/code-review-checklist.prompt.md for the most recent commit (use git rev-parse HEAD).", "--allow-all-tools", "-s"],
+      "isBackground": true,
+      "problemMatcher": []
+    }
+  ]
+}

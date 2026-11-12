@@ -1,0 +1,21 @@
+{
+	"servers": {
+		"clearthought": {
+			"url": "http://localhost:3000/mcp",
+			"type": "http"
+		},
+		"insight": {
+			"url": "http://localhost:3002/mcp",
+			"type": "http"
+		},
+		"guidance": {
+			"url": "http://localhost:3003/mcp",
+			"type": "http"
+		},
+		"gitnexus": {
+			"command": "gitnexus",
+			"args": ["mcp"]
+		}
+	},
+	"inputs": []
+}

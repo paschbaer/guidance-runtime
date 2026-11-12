@@ -1,0 +1,5 @@
+{
+  "max_parallel": 3,
+  "worktree_root": "../forge-agent-worktrees",
+  "branch_prefix": "agent/"
+}

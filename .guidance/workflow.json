@@ -1,0 +1,122 @@
+{
+  "version": 2,
+  "workflow": {
+    "id": "standard-development",
+    "initialPhase": "understand",
+    "terminalStates": [
+      "completed",
+      "cancelled"
+    ]
+  },
+  "phases": {
+    "understand": {
+      "response": "understand",
+      "submissionSchema": "schemas/understand.schema.json",
+      "transitions": [
+        {
+          "to": "plan",
+          "when": "submission_valid"
+        }
+      ]
+    },
+    "plan": {
+      "response": "plan",
+      "submissionSchema": "schemas/plan.schema.json",
+      "transitions": [
+        {
+          "to": "review_and_adjust_plan",
+          "when": "submission_valid"
+        }
+      ]
+    },
+    "review_and_adjust_plan": {
+      "response": "review_and_adjust_plan",
+      "submissionSchema": "schemas/review-plan.schema.json",
+      "transitions": [
+        {
+          "to": "plan",
+          "reason": "major_plan_revision_required"
+        },
+        {
+          "to": "implement",
+          "when": "submission_valid"
+        }
+      ]
+    },
+    "implement": {
+      "response": "implement",
+      "submissionSchema": "schemas/implement.schema.json",
+      "transitions": [
+        {
+          "to": "review_and_fix_implementation",
+          "when": "submission_valid"
+        },
+        {
+          "to": "plan",
+          "reason": "significant_plan_deviation"
+        }
+      ]
+    },
+    "review_and_fix_implementation": {
+      "response": "review_and_fix_implementation",
+      "submissionSchema": "schemas/review-implementation.schema.json",
+      "transitions": [
+        {
+          "to": "implement",
+          "reason": "implementation_changes_required"
+        },
+        {
+          "to": "verify",
+          "when": "submission_valid"
+        }
+      ]
+    },
+    "verify": {
+      "response": "verify",
+      "submissionSchema": "schemas/verify.schema.json",
+      "lifecycle": {
+        "beforeExit": [
+          "lint",
+          "test",
+          "build"
+        ]
+      },
+      "transitions": [
+        {
+          "to": "review_and_fix_implementation",
+          "reason": "verification_failed"
+        },
+        {
+          "to": "complete",
+          "when": "required_operations_succeeded"
+        }
+      ]
+    },
+    "complete": {
+      "response": "complete",
+      "submissionSchema": "schemas/complete.schema.json",
+      "lifecycle": {
+        "beforeExit": [
+          "capture-session-lessons"
+        ]
+      },
+      "transitions": [
+        {
+          "to": "completed",
+          "when": "required_operations_succeeded"
+        }
+      ]
+    }
+  },
+  "states": {
+    "completed": {
+      "terminal": true
+    },
+    "blocked": {
+      "system": true
+    },
+    "cancelled": {
+      "terminal": true
+    }
+  }
+}

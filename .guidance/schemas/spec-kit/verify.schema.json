@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verificationSummary"],
+  "properties": {
+    "verificationSummary": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "skippedChecks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "acceptedCriteriaEvidence": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "convergence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary"],
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": ["converged", "tasks_appended"]
+        },
+        "summary": { "type": "string" },
+        "checkedTasks": { "type": "number" },
+        "findings": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

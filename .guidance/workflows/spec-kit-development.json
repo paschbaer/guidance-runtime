@@ -1,0 +1,81 @@
+{
+  "version": 2,
+  "workflow": {
+    "id": "spec-kit-development",
+    "profile": "spec-kit",
+    "initialPhase": "understand",
+    "terminalStates": ["completed", "cancelled"]
+  },
+  "phases": {
+    "understand": {
+      "$include": "workflow.json#/phases/understand",
+      "submissionSchema": "schemas/spec-kit/understand.schema.json"
+    },
+    "plan": {
+      "$include": "workflow.json#/phases/plan",
+      "transitions": [{ "to": "checklist", "when": "submission_valid" }]
+    },
+    "checklist": {
+      "response": "checklist",
+      "submissionSchema": "schemas/spec-kit/checklist.schema.json",
+      "transitions": [{ "to": "tasks", "when": "submission_valid" }]
+    },
+    "tasks": {
+      "response": "tasks",
+      "submissionSchema": "schemas/spec-kit/tasks.schema.json",
+      "transitions": [
+        { "to": "review_and_adjust_plan", "when": "submission_valid" }
+      ]
+    },
+    "review_and_adjust_plan": {
+      "$include": "workflow.json#/phases/review_and_adjust_plan"
+    },
+    "implement": {
+      "$include": "workflow.json#/phases/implement",
+      "submissionSchema": "schemas/spec-kit/implement.schema.json"
+    },
+    "review_and_fix_implementation": {
+      "$include": "workflow.json#/phases/review_and_fix_implementation",
+      "submissionSchema": "schemas/spec-kit/review-implementation.schema.json",
+      "transitions": [
+        { "to": "implement", "reason": "implementation_changes_required" },
+        { "to": "implement", "reason": "batch_approved_more_pending" },
+        { "to": "verify", "when": "submission_valid" }
+      ]
+    },
+    "verify": {
+      "$include": "workflow.json#/phases/verify",
+      "submissionSchema": "schemas/spec-kit/verify.schema.json",
+      "transitions": [
+        { "to": "implement", "reason": "tasks_appended" },
+        { "to": "complete", "when": "required_operations_succeeded" }
+      ]
+    },
+    "complete": { "$include": "workflow.json#/phases/complete" }
+  },
+  "bindings": {
+    "understand": {
+      "commands": ["/speckit-specify", "/speckit-clarify"],
+      "artifact": { "pattern": "spec.md", "required": true }
+    },
+    "plan": {
+      "commands": ["/speckit-plan"],
+      "artifact": { "pattern": "plan.md", "required": true }
+    },
+    "checklist": {
+      "commands": ["/speckit-checklist"],
+      "artifact": { "pattern": "checklists/**", "required": true }
+    },
+    "tasks": {
+      "commands": ["/speckit-tasks"],
+      "artifact": { "pattern": "tasks.md", "required": true }
+    },
+    "review_and_adjust_plan": { "commands": ["/speckit-analyze"] },
+    "implement": { "commands": ["/speckit-implement"] },
+    "verify": { "commands": ["speckit.converge"] }
+  },
+  "limits": {
+    "maxReviewRoundsPerBatch": 5,
+    "maxConvergencePasses": 5
+  }
+}

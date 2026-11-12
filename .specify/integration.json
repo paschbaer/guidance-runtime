@@ -1,0 +1,19 @@
+{
+  "version": "1.1.2",
+  "integration_state_schema": 1,
+  "installed_integrations": [
+    "generic"
+  ],
+  "integration_settings": {
+    "generic": {
+      "script": "ps",
+      "raw_options": "--commands-dir .agents",
+      "parsed_options": {
+        "commands_dir": ".agents"
+      },
+      "invoke_separator": "."
+    }
+  },
+  "integration": "generic",
+  "default_integration": "generic"
+}
