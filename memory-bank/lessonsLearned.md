@@ -77,6 +77,25 @@ For every lesson, include:
 - **Evidence:** `crates/update/src/lib.rs`, `Cargo.toml`
 - **Status:** Validated
 
+### A cross-compiled binary must be verified structurally, not by running it
+
+- **Date:** 2026-11-12
+- **Context:** Adding an `aarch64-pc-windows-msvc` leg to `Runtime CI` on `windows-latest`.
+- **Observation:** Clippy and the build succeeded for arm64, but `cargo test --target
+  aarch64-pc-windows-msvc` failed with `os error 216`; cargo had compiled the test binary and then
+  tried to execute it on an x64 runner.
+- **Root cause:** The hosted `windows-latest` runner is x64 and does not enable ARM64 emulation, so
+  no ARM64 image can start there — regardless of whether the build is correct.
+- **Lesson:** On a cross-target matrix leg, separate *compiling* from *executing*: `--no-run` still
+  proves the code links for the foreign target, but any claim about runtime behaviour needs the
+  native architecture or a real arm64 host.
+- **Action:** Gate executing test/run steps on the native target, and add a structural check
+  (`scripts/verify-arch.ps1` reads the PE machine field) so a mis-targeted artifact cannot be
+  packaged silently. Do not "fix" a cross-leg run failure by dropping the leg.
+- **Evidence:** `.github/workflows/build.yml`, `.github/workflows/release.yml`,
+  `scripts/verify-arch.ps1`
+- **Status:** Validated
+
 ## Proposed Lessons
 
 None proposed.

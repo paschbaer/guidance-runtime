@@ -31,5 +31,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+      # Cross-compiled binaries cannot be executed on the x64 runner, so the
+      # arm64 leg only builds the test binaries; execution happens in `ci.yml`.
+      - run: cargo test --workspace --target ${{ matrix.target }} --no-run
       - run: cargo test --workspace --target ${{ matrix.target }}
+        if: matrix.target == 'x86_64-pc-windows-msvc'
       - run: cargo build --workspace --target ${{ matrix.target }}
+      # The arm64 output cannot be started on this x64 runner, so verify the
+      # architecture the Windows loader would check before trusting the build.
+      - name: Verify PE architecture
+        shell: pwsh
+        run: ./scripts/verify-arch.ps1 -Path "target/${{ matrix.target }}/debug/guidance.exe" -ExpectedTarget ${{ matrix.target }}

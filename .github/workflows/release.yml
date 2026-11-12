@@ -73,7 +73,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+      - run: cargo test --workspace --target ${{ matrix.target }} --no-run
       - run: cargo test --workspace --target ${{ matrix.target }}
+        if: matrix.target == 'x86_64-pc-windows-msvc'
       - run: cargo build --workspace --release --target ${{ matrix.target }}
 
       - name: Package Runtime Layout
@@ -87,6 +89,9 @@ jobs:
           New-Item -ItemType Directory -Force "$root/bin","$root/config","$root/docs" | Out-Null
 
           Copy-Item "target/${{ matrix.target }}/release/*.exe" "$root/bin" -ErrorAction SilentlyContinue
+          if (-not (Test-Path "$root/bin/guidance.exe")) {
+            throw "cargo build produced no guidance.exe for ${{ matrix.target }}"
+          }
           if (Test-Path "config") { Copy-Item "config/*" "$root/config" -Recurse -ErrorAction SilentlyContinue }
           if (Test-Path "docs") { Copy-Item "docs/*" "$root/docs" -Recurse -ErrorAction SilentlyContinue }
           if (Test-Path "README.md") { Copy-Item "README.md" "$root" }
@@ -103,6 +108,16 @@ jobs:
           Compress-Archive -Path $root -DestinationPath "dist/$name.zip"
           $hash=(Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash
           "$hash  $name.zip" | Out-File "dist/$name-SHA256SUMS.txt" -Encoding ascii
+
+      - name: Verify Packaged Binaries
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          $bin = "dist/guidance-runtime-$env:VERSION-${{ matrix.arch }}/bin"
+          Get-ChildItem "$bin/*.exe" | ForEach-Object {
+            ./scripts/verify-arch.ps1 -Path $_.FullName -ExpectedTarget '${{ matrix.target }}'
+          }
 
       - uses: actions/upload-artifact@v4
         with:

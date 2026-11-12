@@ -30,7 +30,7 @@
 │   ├── update/      guidance-update     — update check/verify/install library
 │   └── updater/     guidance-updater    — self-update helper (bin)
 ├── config/          runtime.example.toml, updates.example.toml
-├── scripts/         build.ps1, install-dev.ps1, uninstall-dev.ps1
+├── scripts/         build.ps1, install-dev.ps1, uninstall-dev.ps1, verify-arch.ps1
 ├── docs/            SPECIFICATION-v1.1.md, IMPLEMENTATION_STATUS.md, SECURITY.md
 ├── .github/         workflows (ci.yml, release.yml), prompts, agents, skills
 ├── .guidance/       Guidance MCP workflow configuration
@@ -91,12 +91,16 @@ cargo clean
 
 ## CI/CD
 
-- **CI provider:** GitHub Actions (`.github/workflows/ci.yml`), matrix `windows-latest` and
-  `ubuntu-latest`
+- **CI provider:** GitHub Actions
+  - `.github/workflows/ci.yml`: matrix `windows-latest` and `ubuntu-latest`, native builds
+  - `.github/workflows/build.yml` (`Runtime CI`): matrix `x86_64-pc-windows-msvc` and
+    `aarch64-pc-windows-msvc` on `windows-latest` (x64 runner), so the arm64 leg cross-compiles
 - **Validation workflow:** `cargo fmt --all -- --check` → `cargo clippy --workspace
   --all-targets -- -D warnings` → `cargo test --workspace` → `cargo build --workspace
   --release`; dependencies are cached with `Swatinem/rust-cache@v2`
 - **Release workflow:** `.github/workflows/release.yml`
+  - Builds both `windows-x64` and `windows-arm64` on `windows-latest` and verifies the PE machine
+    type of every packaged `.exe` with `scripts/verify-arch.ps1` before uploading the artifact
   - Push to `develop` → `v1.3.0-beta.<run-number>` prerelease
   - Push to `main` → `v1.3.<run-number>` stable release, marked Latest
   - Only changes under `crates/**`, `config/**`, `scripts/**`, the Cargo files,
@@ -123,6 +127,20 @@ cargo clean
 - `zip = "2"` is resolved to a 2.x release; the extraction code uses `enclosed_name() -> PathBuf`.
 
 ## Troubleshooting
+
+### An arm64 test binary cannot be executed on an x64 runner
+
+**Symptoms:** `cargo test --target aarch64-pc-windows-msvc` compiles, then fails with
+`could not execute process ... (never executed)` → `os error 216` ("This version of %1 is not
+compatible with the version of Windows you're running").
+
+**Cause:** The hosted `windows-latest` runner is x64. Windows refuses to start an ARM64 image
+unless ARM64 emulation is enabled (for example on arm64 Windows itself).
+
+**Resolution:** Keep `--no-run` on the arm64 leg so the test binaries are still linked, gate the
+executing `cargo test` on the native target, and verify the produced executables with
+`scripts/verify-arch.ps1` (PE machine field). Only the arm64 acceptance criterion itself needs a
+real arm64 runner or device.
 
 ### `cargo clippy --workspace --all-targets -- -D warnings` fails on Linux/CI but not locally
 
