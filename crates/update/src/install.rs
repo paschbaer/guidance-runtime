@@ -5,6 +5,7 @@
 use crate::ports::Installer;
 use crate::UpdateConfig;
 use anyhow::{bail, Result};
+#[cfg(windows)]
 use std::{fs, path::Path};
 
 /// Installs an update from a ZIP archive using `sc.exe` for service control.
