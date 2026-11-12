@@ -18,9 +18,10 @@ service_name = "GuidanceRuntime"
 # --- Multi-target form (delete the flat keys above to use it) --------------
 #
 # Each target names where its releases live, whether that source is public or
-# private, and where it is installed. Two targets must not share an
-# install_dir, because installing one would overwrite the other; a target's
-# install_dir must also not be another target's rollback directory.
+# private, and where it is installed. install_dir is required in this form;
+# only the legacy flat form keeps its historical default. Two targets must not
+# share an install_dir, because installing one would overwrite the other; a
+# target's install_dir must also not be another target's rollback directory.
 #
 # For a target named "guidance-runtime", an omitted service_name still means
 # the historical service "GuidanceRuntime". For any other target, omitting

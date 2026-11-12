@@ -171,10 +171,11 @@ impl Installer for RecordingInstaller {
     }
 }
 
-fn release(tag: &str, prerelease: bool, assets: &[&str]) -> Release {
+/// Builds a release exactly from the given asset names.
+fn raw_release(tag: &str, assets: &[&str]) -> Release {
     Release {
         tag_name: tag.into(),
-        prerelease,
+        prerelease: false,
         draft: false,
         assets: assets
             .iter()
@@ -185,6 +186,25 @@ fn release(tag: &str, prerelease: bool, assets: &[&str]) -> Release {
             })
             .collect(),
     }
+}
+
+/// Builds a release with a checksum asset, unless the caller supplied one.
+///
+/// A release without a checksum is not installable, so the default fixture is
+/// a deliverable release; tests that need the broken shape use
+/// [`raw_release`].
+fn release(tag: &str, prerelease: bool, assets: &[&str]) -> Release {
+    let mut names: Vec<&str> = assets.to_vec();
+    let has_zip = names.iter().any(|name| name.ends_with(".zip"));
+    let has_checksum = names
+        .iter()
+        .any(|name| name.to_ascii_lowercase().contains("sha256"));
+    if has_zip && !has_checksum {
+        names.push("windows-x64.zip.sha256");
+    }
+    let mut release = raw_release(tag, &names);
+    release.prerelease = prerelease;
+    release
 }
 
 fn config(channel: Channel) -> UpdateTarget {
@@ -388,11 +408,15 @@ async fn download_fails_on_a_mismatching_checksum() {
 
 #[tokio::test]
 async fn download_refuses_an_update_without_checksum_asset() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[ASSET])]);
-    let update = check_with(&source, &config(Channel::Stable), None, &v("1.0.0"))
-        .await
-        .unwrap()
-        .unwrap();
+    let update = crate::AvailableUpdate {
+        current: v("1.0.0"),
+        version: v("2.0.0"),
+        tag: "v2.0.0".into(),
+        channel: Channel::Stable,
+        asset_name: ASSET.into(),
+        download_url: crate::asset_endpoint("owner/repo", 1000),
+        checksum_url: None,
+    };
     let downloader = FixedDownloader(b"payload".to_vec(), Vec::new());
     let err = download_and_verify_with(&downloader, &update, None)
         .await
@@ -2136,4 +2160,114 @@ async fn install_all_does_not_install_when_the_checksum_fails() {
     assert!(matches!(run.entries[0], crate::InstallEntry::Failed { .. }));
     assert!(run.entries[0].render().contains("SHA-256 mismatch"));
     assert_eq!(run.exit_status(), 2);
+}
+
+/// F-001: a newer release with no artifact for this platform is not "up to
+/// date"; it is an invalid artifact and the run fails.
+#[tokio::test]
+async fn a_release_without_a_matching_artifact_is_invalid_artifact() {
+    let (target, _dir) =
+        runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Public, "1.0.0");
+    let source = FixedReleases(vec![release("v2.0.0", false, &["linux-x86_64.zip"])]);
+    let run = crate::check_all(
+        &source,
+        &FixedCredentialStore(None),
+        &cfg_of(vec![target]),
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert_eq!(run.targets[0].state, TargetState::InvalidArtifact);
+    assert!(
+        run.targets[0]
+            .detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("artifact"),
+        "{:?}",
+        run.targets[0].detail
+    );
+    assert_eq!(run.exit_status(), 2);
+}
+
+/// F-001: a newer release with a matching archive but no checksum asset is
+/// reported as invalid artifact by the multi-target check, not as an available
+/// update.
+#[tokio::test]
+async fn a_release_without_a_checksum_is_invalid_artifact() {
+    let (target, _dir) =
+        runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Public, "1.0.0");
+    let source = FixedReleases(vec![raw_release("v2.0.0", &[X64])]);
+    let run = crate::check_all(
+        &source,
+        &FixedCredentialStore(None),
+        &cfg_of(vec![target]),
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert_eq!(run.targets[0].state, TargetState::InvalidArtifact);
+    assert!(
+        run.targets[0]
+            .detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("checksum"),
+        "{:?}",
+        run.targets[0].detail
+    );
+    assert_eq!(run.exit_status(), 2);
+}
+
+/// The install path must refuse the same unverifiable release and must not
+/// call the installer.
+#[tokio::test]
+async fn install_all_refuses_an_unverifiable_release_without_installing() {
+    let (target, _dir) = runtime_target_with_marker("a", Visibility::Public, "1.0.0");
+    let cfg = cfg_of(vec![target]);
+    let installed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let installer = RecordingInstaller {
+        installed: installed.clone(),
+        fail: false,
+    };
+
+    let run = crate::install_all(
+        &FixedReleases(vec![raw_release("v2.0.0", &[X64])]),
+        &matching_downloader(b"payload"),
+        &installer,
+        &NoCredentialStore,
+        &cfg,
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert!(installed.lock().unwrap().is_empty());
+    assert!(matches!(run.entries[0], crate::InstallEntry::Failed { .. }));
+    assert!(run.entries[0].render().contains("checksum"));
+    assert_eq!(run.exit_status(), 2);
+}
+
+/// A not-installed private target has nothing to update, so install skips it
+/// before resolving a credential. The store double panics if consulted.
+#[tokio::test]
+async fn install_all_skips_a_not_installed_private_target_without_the_store() {
+    let cfg = cfg_of(vec![target("guidance", Visibility::Private)]);
+    let run = crate::install_all(
+        &update_source(),
+        &matching_downloader(b"payload"),
+        &RecordingInstaller {
+            installed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            fail: false,
+        },
+        &NoCredentialStore,
+        &cfg,
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert!(matches!(
+        run.entries[0],
+        crate::InstallEntry::NotInstalled { .. }
+    ));
+    assert_eq!(run.exit_status(), 0);
 }

@@ -59,7 +59,9 @@ pub struct UpdateTarget {
     pub credential_entry: Option<String>,
     #[serde(default = "default_channel")]
     pub channel: Channel,
-    #[serde(default = "default_install_dir")]
+    /// Required in the `[[targets]]` form: each target must state where it is
+    /// installed. Only the legacy flat form defaults this value, because that
+    /// form predates the field being mandatory.
     pub install_dir: PathBuf,
     /// Present only for targets that control a service.
     #[serde(default)]

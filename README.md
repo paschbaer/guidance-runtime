@@ -82,7 +82,7 @@ channel = "stable"
 install_dir = "C:/Program Files/Guidance"
 ```
 
-Two targets must not share an `install_dir`, and no target's `install_dir` may equal another target's rollback directory. A target named `guidance-runtime` keeps the service `GuidanceRuntime` even if `service_name` is omitted; any other target without `service_name` is installed without service control.
+Two targets must not share an `install_dir`, and no target's `install_dir` may equal another target's rollback directory. `install_dir` is required in this form; only the flat form keeps its historical default. A target named `guidance-runtime` keeps the service `GuidanceRuntime` even if `service_name` is omitted; any other target without `service_name` is installed without service control.
 
 ### Private sources and credential provisioning
 

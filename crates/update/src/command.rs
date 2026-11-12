@@ -402,7 +402,7 @@ async fn check_one(
         }
     };
 
-    match crate::selection::select(
+    match crate::selection::select_detailed(
         &target.repository,
         target.channel,
         &baseline,
@@ -410,15 +410,43 @@ async fn check_one(
         expected,
         releases,
     ) {
-        Some(update) => TargetCheck::new(
+        crate::selection::Selection::Available(update) => {
+            if update.checksum_url.is_none() {
+                // A newer release is selected, but it cannot be verified. This is
+                // not "up to date": the release exists and is unusable, which is
+                // exactly the invalid_artifact family.
+                TargetCheck::new(
+                    &target.name,
+                    TargetState::InvalidArtifact,
+                    installed,
+                    None,
+                    target.channel.to_string(),
+                    Some(
+                        "release has no SHA-256 checksum asset; refusing to offer an \
+                         unverified update"
+                            .to_string(),
+                    ),
+                )
+            } else {
+                TargetCheck::new(
+                    &target.name,
+                    TargetState::UpdateAvailable,
+                    installed,
+                    Some(update.version.to_string()),
+                    target.channel.to_string(),
+                    None,
+                )
+            }
+        }
+        crate::selection::Selection::NoArtifact => TargetCheck::new(
             &target.name,
-            TargetState::UpdateAvailable,
+            TargetState::InvalidArtifact,
             installed,
-            Some(update.version.to_string()),
-            target.channel.to_string(),
             None,
+            target.channel.to_string(),
+            Some("release exists but has no usable artifact for this platform".to_string()),
         ),
-        None => TargetCheck::new(
+        crate::selection::Selection::None => TargetCheck::new(
             &target.name,
             TargetState::UpToDate,
             installed,
@@ -525,6 +553,17 @@ pub async fn install_all(
 ) -> InstallRun {
     let mut entries = Vec::with_capacity(config.targets().len());
     for target in config.targets() {
+        // A target with no local installation is not an update candidate. This
+        // is checked before the credential so a not-installed private target is
+        // skipped honestly instead of reporting an access failure for an
+        // installation that does not exist.
+        if installed_version(target, current).is_none() {
+            entries.push(InstallEntry::NotInstalled {
+                target: target.name.clone(),
+            });
+            continue;
+        }
+
         let token = match token_for(store, target).await {
             Ok(token) => token,
             Err((_, detail)) => {
@@ -536,17 +575,17 @@ pub async fn install_all(
             }
         };
 
-        // A target with no local installation is not an update candidate. This
-        // mirrors check_one, so the two paths cannot disagree.
-        if installed_version(target, current).is_none() {
-            entries.push(InstallEntry::NotInstalled {
-                target: target.name.clone(),
-            });
-            continue;
-        }
-
-        match crate::check_with(source, target, token.as_ref(), current).await {
-            Ok(Some(update)) => {
+        match crate::select_for_target(source, target, token.as_ref(), current).await {
+            Ok(crate::selection::Selection::Available(update)) => {
+                if update.checksum_url.is_none() {
+                    entries.push(InstallEntry::Failed {
+                        target: target.name.clone(),
+                        error: "release has no SHA-256 checksum asset; refusing to install \
+                                an unverified archive"
+                            .to_string(),
+                    });
+                    continue;
+                }
                 let result = match crate::download_and_verify_with(
                     downloader,
                     &update,
@@ -568,8 +607,12 @@ pub async fn install_all(
                     }),
                 }
             }
-            Ok(None) => entries.push(InstallEntry::UpToDate {
+            Ok(crate::selection::Selection::None) => entries.push(InstallEntry::UpToDate {
                 target: target.name.clone(),
+            }),
+            Ok(crate::selection::Selection::NoArtifact) => entries.push(InstallEntry::Failed {
+                target: target.name.clone(),
+                error: "release has no usable artifact for this platform".to_string(),
             }),
             Err(e) => entries.push(InstallEntry::Failed {
                 target: target.name.clone(),

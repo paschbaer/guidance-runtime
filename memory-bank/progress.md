@@ -181,4 +181,9 @@ depend on input from the maintainers.
   a backup-path collision that could delete another target's installation; additive rollback;
   a runtime-behaviour change when `service_name` was omitted; and a Windows credential hint that
   named a store target the lookup never reads.
-- Workspace tests 109 → 160 (141 in `guidance-update`).
+- Final review found and fixed: `invalid_artifact` was unreachable because a newer release without
+  a usable artifact was reported as up to date (the multi-target check and install now classify it
+  correctly); `[[targets]]` no longer defaults a missing `install_dir` to the runtime's directory;
+  install skips a not-installed target before resolving a credential, so a private target without
+  an installation is not reported as an access failure.
+- Workspace tests 109 → 166 (147 in `guidance-update`).

@@ -149,13 +149,14 @@ pub async fn check(
     check_with(&source, target, token, current).await
 }
 
-/// Channel-aware release lookup against an arbitrary [`Releases`] port.
-pub async fn check_with(
+/// The detailed selection for a target, used by the check and install paths so
+/// an undeliverable release is visible instead of collapsing to "no update".
+pub(crate) async fn select_for_target(
     source: &dyn Releases,
     target: &UpdateTarget,
     token: Option<&Secret>,
     current: &Version,
-) -> Result<Option<AvailableUpdate>> {
+) -> Result<crate::selection::Selection> {
     let releases = source
         .list(ports::Access {
             target: &target.name,
@@ -172,7 +173,7 @@ pub async fn check_with(
     let baseline = marker::read_version(&target.install_dir, &target.name)
         .and_then(|version| Version::parse(&version).ok())
         .unwrap_or_else(|| current.clone());
-    Ok(selection::select(
+    Ok(selection::select_detailed(
         &target.repository,
         target.channel,
         &baseline,
@@ -180,6 +181,24 @@ pub async fn check_with(
         expected,
         releases,
     ))
+}
+
+/// Channel-aware release lookup against an arbitrary [`Releases`] port.
+///
+/// The historical single-target path keeps its permissive view: a release with
+/// a usable archive but no checksum asset is still offered here, and the
+/// download step refuses it. The multi-target check reports that case as
+/// `invalid_artifact` because it has a state for it.
+pub async fn check_with(
+    source: &dyn Releases,
+    target: &UpdateTarget,
+    token: Option<&Secret>,
+    current: &Version,
+) -> Result<Option<AvailableUpdate>> {
+    match select_for_target(source, target, token, current).await? {
+        selection::Selection::Available(update) => Ok(Some(update)),
+        selection::Selection::None | selection::Selection::NoArtifact => Ok(None),
+    }
 }
 
 /// Downloads the update asset and verifies it against the release checksum.

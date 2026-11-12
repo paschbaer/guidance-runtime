@@ -488,3 +488,23 @@ install_dir = "/apps/App.Prod"
         "{err}"
     );
 }
+
+/// FR-020: the `[[targets]]` form must state where each product is installed.
+/// Only the legacy flat form keeps its historical optional default.
+#[test]
+fn a_target_without_install_dir_is_rejected_naming_the_field() {
+    let err = format!(
+        "{:#}",
+        parse("[[targets]]\nname = \"a\"\nrepository = \"A/A\"\n").unwrap_err()
+    );
+    assert!(err.contains("install_dir"), "{err}");
+}
+
+#[test]
+fn a_legacy_flat_form_still_defaults_the_install_dir() {
+    let cfg = parse("repository = \"A/A\"\n").unwrap();
+    assert_eq!(
+        cfg.targets()[0].install_dir,
+        std::path::PathBuf::from(r"C:\Program Files\Guidance Runtime")
+    );
+}

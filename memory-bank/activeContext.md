@@ -30,7 +30,7 @@ not this feature.
       classification, credential wiring.
 - [x] Implement phases 5-7 (T023-T040): structured text and JSON output, `--format`, version
       marker, shared transactional install, per-target orchestration, macOS CI leg, docs, READMEs,
-      least privilege, quickstart validation. Workspace tests 160 (141 in `guidance-update`).
+      least privilege, quickstart validation. Workspace tests 166 (147 in `guidance-update`).
 - [ ] Complete `projectBrief.md` — blocked on owner and primary-user input.
 - [ ] Complete `productContext.md` — user journeys need product input.
 

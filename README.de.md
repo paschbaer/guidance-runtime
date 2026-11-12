@@ -82,7 +82,7 @@ channel = "stable"
 install_dir = "C:/Program Files/Guidance"
 ```
 
-Zwei Ziele dürfen kein `install_dir` teilen, und kein `install_dir` darf dem Rollback-Verzeichnis eines anderen Ziels entsprechen. Ein Ziel namens `guidance-runtime` behält den Dienst `GuidanceRuntime` auch ohne `service_name`; jedes andere Ziel ohne `service_name` wird ohne Dienststeuerung installiert.
+Zwei Ziele dürfen kein `install_dir` teilen, und kein `install_dir` darf dem Rollback-Verzeichnis eines anderen Ziels entsprechen. `install_dir` ist in dieser Form Pflicht; nur die flache Form behält ihren historischen Standardwert. Ein Ziel namens `guidance-runtime` behält den Dienst `GuidanceRuntime` auch ohne `service_name`; jedes andere Ziel ohne `service_name` wird ohne Dienststeuerung installiert.
 
 ### Private Quellen und Zugangsdaten
 
