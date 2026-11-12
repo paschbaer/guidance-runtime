@@ -4,10 +4,26 @@ jobs:
   build:
     strategy: {matrix: {os: [windows-latest, ubuntu-latest]}}
     runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
+
+      - name: Show ci.yml
+        run: cat .github/workflows/ci.yml
+
+      - name: Dump workflow files
+        shell: bash
+        run: |
+          echo "=== ci.yml ==="
+          cat .github/workflows/ci.yml
+
+          echo ""
+          echo "=== release.yml ==="
+          cat .github/workflows/release.yml
+
       - uses: dtolnay/rust-toolchain@stable
         with: {components: rustfmt, clippy}
+
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
