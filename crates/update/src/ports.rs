@@ -4,7 +4,7 @@
 //! Async methods use boxed futures instead of `async fn` in traits: the
 //! workspace deliberately avoids the `async-trait` dependency.
 
-use crate::{Release, UpdateConfig};
+use crate::{Release, UpdateTarget};
 use anyhow::Result;
 use std::future::Future;
 use std::pin::Pin;
@@ -22,6 +22,10 @@ pub trait Downloader: Send + Sync {
 }
 
 /// Replaces the installed binaries with the ones contained in an archive.
+///
+/// The resolved target is passed instead of the whole configuration: an
+/// installer that has to re-derive which target it is installing is exactly
+/// the ambiguity that lets one target's files land in another's directory.
 pub trait Installer {
-    fn install(&self, config: &UpdateConfig, bytes: &[u8]) -> Result<()>;
+    fn install(&self, target: &UpdateTarget, bytes: &[u8]) -> Result<()>;
 }

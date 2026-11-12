@@ -1,11 +1,46 @@
+# Guidance Runtime update configuration.
+#
+# Two forms are accepted. The flat form below describes a single product and is
+# read exactly as it always was: it becomes one target named "guidance-runtime",
+# and its output wording is unchanged. Use the [[targets]] form to maintain more
+# than one product with the same updater.
+
+# --- Flat form (single product) --------------------------------------------
+
 # GitHub owner/repository containing Guidance Runtime releases.
 repository = "YOUR-ORG/guidance-runtime"
 channel = "stable"
 install_dir = "C:/Program Files/Guidance Runtime"
 service_name = "GuidanceRuntime"
 
-# Optional. The asset suffix the updater looks for.
-# Omit this key to derive it from the architecture the binary runs on
-# (x86_64 -> "windows-x64.zip", aarch64 -> "windows-arm64.zip").
-# Set it only to override that choice; an empty value is rejected.
+# --- Multi-target form (delete the flat keys above to use it) --------------
+#
+# Each target names where its releases live, whether that source is public or
+# private, and where it is installed. Two targets must not share an
+# install_dir, because installing one would overwrite the other.
+#
+# [[targets]]
+# name = "guidance-runtime"
+# repository = "YOUR-ORG/guidance-runtime"
+# visibility = "public"
+# channel = "stable"
+# install_dir = "C:/Program Files/Guidance Runtime"
+# service_name = "GuidanceRuntime"
+#
+# [[targets]]
+# name = "guidance"
+# repository = "YOUR-ORG/guidance-dist"
+# visibility = "private"
+# # The NAME of the credential store entry, never the secret itself. The secret
+# # is read from the operating system's protected per-user store.
+# credential_entry = "guidance-update"
+# channel = "stable"
+# install_dir = "C:/Program Files/Guidance"
+
+# Optional, per target. The asset suffix the updater looks for.
+# Omit this key to derive it from the platform and architecture the binary runs
+# on (windows-x64.zip, windows-arm64.zip, macos-x86_64.zip, macos-aarch64.zip,
+# linux-x86_64.zip, linux-aarch64.zip).
+# Set it only to override that choice; an empty value is rejected, and so is a
+# value that does not end in .zip.
 # asset_pattern = "windows-x64.zip"

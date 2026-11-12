@@ -9,32 +9,41 @@
 use anyhow::{bail, Context, Result};
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
 
 mod arch;
 mod command;
+mod config;
+#[cfg(test)]
+mod config_tests;
 mod github;
 mod install;
 mod params;
 mod ports;
+mod report;
 mod selection;
 #[cfg(test)]
 mod tests;
 
-pub use arch::{asset_suffix_for_arch, running_arch, KNOWN_ARCH_SUFFIXES};
-pub use command::{check_update, current_version, set_or_get_channel, UpdateOutcome};
+pub use arch::{
+    asset_suffix_for, asset_suffix_for_arch, running_arch, Platform, KNOWN_ARCH_SUFFIXES,
+};
+pub use command::{
+    check_all, check_update, check_update_with, current_version, set_or_get_channel,
+    uses_legacy_output, UpdateOutcome,
+};
+pub use config::{ConfigFile, UpdateConfig, UpdateTarget, Visibility, LEGACY_TARGET_NAME};
+pub use github::GitHubReleases;
 pub use ports::{BoxFuture, Downloader, Installer, Releases};
+pub use report::{render_check, render_run, TargetCheck, TargetState, UpdateRun};
 
 pub use selection::{is_allowed, parse_checksum, select};
 
 pub const DEFAULT_CONFIG: &str = r"C:\ProgramData\Guidance Runtime\config\updates.toml";
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Channel {
+    #[default]
     Stable,
     Beta,
 }
@@ -61,67 +70,6 @@ impl std::str::FromStr for Channel {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateConfig {
-    pub repository: String,
-    #[serde(default = "stable")]
-    pub channel: Channel,
-    #[serde(default = "install_dir")]
-    pub install_dir: PathBuf,
-    #[serde(default = "service_name")]
-    pub service_name: String,
-    /// Optional asset suffix override. When absent the suffix is derived from
-    /// the running architecture, so an installation never asks for another
-    /// architecture's archive by default.
-    #[serde(default)]
-    pub asset_pattern: Option<String>,
-}
-fn stable() -> Channel {
-    Channel::Stable
-}
-fn install_dir() -> PathBuf {
-    PathBuf::from(r"C:\Program Files\Guidance Runtime")
-}
-fn service_name() -> String {
-    "GuidanceRuntime".into()
-}
-impl UpdateConfig {
-    /// The asset suffix to look for: the explicit override when configured,
-    /// otherwise the suffix of the architecture this binary runs on.
-    ///
-    /// An explicitly configured but empty value is rejected rather than
-    /// treated as "unset": an empty suffix matches every archive, which is
-    /// exactly the architecture-blind behaviour this type avoids.
-    pub fn resolved_asset_pattern(&self) -> Result<String> {
-        let Some(raw) = self.asset_pattern.as_deref() else {
-            return Ok(arch::asset_suffix_for_arch(arch::running_arch())?.to_string());
-        };
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            bail!(
-                "asset_pattern is set but blank; omit it to derive the pattern from the running \
-                 architecture"
-            );
-        }
-        if !trimmed.ends_with(".zip") {
-            bail!("asset_pattern must end with .zip, got '{trimmed}'");
-        }
-        Ok(trimmed.to_string())
-    }
-
-    pub fn load(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        Ok(toml::from_str(&text)?)
-    }
-    pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(p) = path.parent() {
-            fs::create_dir_all(p)?
-        }
-        fs::write(path, toml::to_string_pretty(self)?)?;
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct Release {
     pub tag_name: String,
@@ -145,22 +93,22 @@ pub struct AvailableUpdate {
     pub checksum_url: Option<String>,
 }
 /// Looks up the newest update offered on the configured channel.
-pub async fn check(config: &UpdateConfig, current: &Version) -> Result<Option<AvailableUpdate>> {
+pub async fn check(target: &UpdateTarget, current: &Version) -> Result<Option<AvailableUpdate>> {
     let source = github::GitHubReleases::new();
-    check_with(&source, config, current).await
+    check_with(&source, target, current).await
 }
 
 /// Channel-aware release lookup against an arbitrary [`Releases`] port.
 pub async fn check_with(
     source: &dyn Releases,
-    config: &UpdateConfig,
+    target: &UpdateTarget,
     current: &Version,
 ) -> Result<Option<AvailableUpdate>> {
-    let releases = source.list(&config.repository).await?;
-    let pattern = config.resolved_asset_pattern()?;
+    let releases = source.list(&target.repository).await?;
+    let pattern = target.resolved_asset_pattern()?;
     let expected = arch::asset_suffix_for_arch(arch::running_arch())?;
     Ok(selection::select(
-        config.channel,
+        target.channel,
         current,
         &pattern,
         expected,
@@ -194,6 +142,6 @@ pub async fn download_and_verify_with(
 }
 
 /// Installs a downloaded archive with the default installer.
-pub fn install_archive(config: &UpdateConfig, bytes: &[u8]) -> Result<()> {
-    install::ZipInstaller.install(config, bytes)
+pub fn install_archive(target: &UpdateTarget, bytes: &[u8]) -> Result<()> {
+    install::ZipInstaller.install(target, bytes)
 }

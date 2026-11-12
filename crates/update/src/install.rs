@@ -3,7 +3,7 @@
 //! restore the backup on any failure.
 
 use crate::ports::Installer;
-use crate::UpdateConfig;
+use crate::UpdateTarget;
 use anyhow::{bail, Result};
 #[cfg(windows)]
 use std::{fs, path::Path};
@@ -12,13 +12,13 @@ use std::{fs, path::Path};
 pub struct ZipInstaller;
 
 impl Installer for ZipInstaller {
-    fn install(&self, config: &UpdateConfig, bytes: &[u8]) -> Result<()> {
-        install_archive(config, bytes)
+    fn install(&self, target: &UpdateTarget, bytes: &[u8]) -> Result<()> {
+        install_archive(target, bytes)
     }
 }
 
 #[allow(unused_variables)]
-fn install_archive(config: &UpdateConfig, bytes: &[u8]) -> Result<()> {
+fn install_archive(target: &UpdateTarget, bytes: &[u8]) -> Result<()> {
     #[cfg(not(windows))]
     {
         bail!("installation is supported on Windows only")
@@ -41,22 +41,22 @@ fn install_archive(config: &UpdateConfig, bytes: &[u8]) -> Result<()> {
                 if let Some(p) = out.parent() {
                     fs::create_dir_all(p)?
                 }
-                let mut target = fs::File::create(&out)?;
-                std::io::copy(&mut file, &mut target)?;
+                let mut sink = fs::File::create(&out)?;
+                std::io::copy(&mut file, &mut sink)?;
             }
         }
         let source = find_bin_dir(staging.path())?;
-        let backup = config.install_dir.with_extension("backup");
-        run_sc("stop", &config.service_name)?;
+        let backup = target.install_dir.with_extension("backup");
+        run_sc("stop", &service_name(target))?;
         std::thread::sleep(std::time::Duration::from_secs(2));
         let operation = (|| -> Result<()> {
             if backup.exists() {
                 fs::remove_dir_all(&backup)?
             }
-            if config.install_dir.exists() {
-                copy_dir(&config.install_dir, &backup)?
+            if target.install_dir.exists() {
+                copy_dir(&target.install_dir, &backup)?
             }
-            fs::create_dir_all(&config.install_dir)?;
+            fs::create_dir_all(&target.install_dir)?;
             for name in [
                 "guidance-service.exe",
                 "guidance.exe",
@@ -65,21 +65,21 @@ fn install_archive(config: &UpdateConfig, bytes: &[u8]) -> Result<()> {
             ] {
                 let src = source.join(name);
                 if src.exists() {
-                    fs::copy(src, config.install_dir.join(name))?;
+                    fs::copy(src, target.install_dir.join(name))?;
                 }
             }
             Ok(())
         })();
         if let Err(e) = operation {
             if backup.exists() {
-                let _ = copy_dir(&backup, &config.install_dir);
+                let _ = copy_dir(&backup, &target.install_dir);
             }
-            let _ = run_sc("start", &config.service_name);
+            let _ = run_sc("start", &service_name(target));
             return Err(e);
         }
-        if let Err(e) = run_sc("start", &config.service_name) {
-            let _ = copy_dir(&backup, &config.install_dir);
-            let _ = run_sc("start", &config.service_name);
+        if let Err(e) = run_sc("start", &service_name(target)) {
+            let _ = copy_dir(&backup, &target.install_dir);
+            let _ = run_sc("start", &service_name(target));
             return Err(e);
         }
         Ok(())
@@ -96,6 +96,14 @@ fn run_sc(action: &str, service: &str) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(windows)]
+fn service_name(target: &UpdateTarget) -> String {
+    target
+        .service_name
+        .clone()
+        .unwrap_or_else(|| "GuidanceRuntime".to_string())
+}
+
 #[cfg(windows)]
 fn find_bin_dir(root: &Path) -> Result<std::path::PathBuf> {
     for p in walk(root)? {
@@ -136,12 +144,15 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn config() -> UpdateConfig {
-        UpdateConfig {
+    fn config() -> UpdateTarget {
+        UpdateTarget {
+            name: "guidance-runtime".into(),
             repository: "owner/repo".into(),
+            visibility: crate::Visibility::Public,
+            credential_entry: None,
             channel: crate::Channel::Stable,
             install_dir: PathBuf::from(r"C:\Program Files\Guidance Runtime"),
-            service_name: "GuidanceRuntime".into(),
+            service_name: Some("GuidanceRuntime".into()),
             asset_pattern: Some("windows-x64.zip".into()),
         }
     }

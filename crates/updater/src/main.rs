@@ -24,6 +24,8 @@ enum Cmd {
         yes: bool,
         #[arg(long)]
         wait_pid: Option<u32>,
+        #[arg(long)]
+        target: Option<String>,
     },
     Channel {
         channel: Option<Channel>,
@@ -35,23 +37,36 @@ async fn main() -> Result<()> {
     let cfg = UpdateConfig::load(&cli.config)?;
     match cli.command {
         Cmd::Channel { channel } => {
-            println!(
-                "{}",
-                guidance_update::set_or_get_channel(&cli.config, channel)?
-            )
+            let mut cfg = cfg;
+            let message = guidance_update::set_or_get_channel(&mut cfg, None, channel)?;
+            if channel.is_some() {
+                cfg.save(&cli.config)?;
+            }
+            println!("{message}")
         }
         Cmd::Check { current } => {
             let v = match current {
                 Some(v) => v,
                 None => guidance_update::current_version()?,
             };
-            let outcome = guidance_update::check_update(&cfg, &v).await?;
-            println!("{}", outcome.message())
+            let source = guidance_update::GitHubReleases::new();
+
+            if guidance_update::uses_legacy_output(&cfg, None) {
+                let only = cfg.single_target()?;
+                let outcome = guidance_update::check_update_with(&source, only, &v).await?;
+                println!("{}", outcome.message());
+                return Ok(());
+            }
+
+            let run = guidance_update::check_all(&source, &cfg, &v).await;
+            print!("{}", guidance_update::render_run(&run));
+            std::process::exit(run.exit_status() as i32);
         }
         Cmd::Install {
             current,
             yes,
             wait_pid,
+            target,
         } => {
             if !yes {
                 anyhow::bail!("installation requires --yes")
@@ -63,13 +78,21 @@ async fn main() -> Result<()> {
                 Some(v) => v,
                 None => guidance_update::current_version()?,
             };
-            let u = guidance_update::check(&cfg, &v)
+            let resolved = match target {
+                Some(name) => cfg
+                    .targets()
+                    .iter()
+                    .find(|t| t.name == name)
+                    .with_context(|| format!("target '{name}' is not configured"))?,
+                None => cfg.single_target()?,
+            };
+            let u = guidance_update::check(resolved, &v)
                 .await?
                 .context("no update available")?;
             println!("Downloading {}", u.asset_name);
             let b = guidance_update::download_and_verify(&u).await?;
-            guidance_update::install_archive(&cfg, &b)?;
-            println!("Installed Guidance Runtime {}", u.version)
+            guidance_update::install_archive(resolved, &b)?;
+            println!("Installed {} {}", resolved.name, u.version)
         }
     }
     Ok(())

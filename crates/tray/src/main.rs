@@ -17,7 +17,7 @@ fn main() -> anyhow::Result<()> {
     let menu = Menu::new();
     let status = MenuItem::new("Guidance Runtime: connecting", false, None);
     let channel_text = UpdateConfig::load(Path::new(guidance_update::DEFAULT_CONFIG))
-        .map(|c| format!("Update channel: {}", c.channel))
+        .map(|c| format!("Update channel: {}", channel_summary(&c)))
         .unwrap_or_else(|_| "Update channel: not configured".into());
     let channel = MenuItem::new(channel_text, false, None);
     let check = MenuItem::new("Check for updates", true, None);
@@ -60,6 +60,19 @@ fn main() -> anyhow::Result<()> {
         check,
     })?;
     Ok(())
+}
+
+/// A short channel summary for the tray label: the single channel when one
+/// target is configured, otherwise a count, so the label cannot imply that one
+/// channel governs every target.
+#[cfg(windows)]
+fn channel_summary(config: &guidance_update::UpdateConfig) -> String {
+    let targets = config.targets();
+    if let [only] = targets {
+        only.channel.to_string()
+    } else {
+        format!("{} targets", targets.len())
+    }
 }
 
 #[cfg(windows)]
@@ -116,7 +129,7 @@ impl winit::application::ApplicationHandler for TrayApp {
             });
             if let Ok(c) = UpdateConfig::load(Path::new(guidance_update::DEFAULT_CONFIG)) {
                 self.channel
-                    .set_text(format!("Update channel: {}", c.channel));
+                    .set_text(format!("Update channel: {}", channel_summary(&c)));
             }
         } else if item.id == self.start_id {
             let _ = self.runtime.block_on(guidance_ipc::request(Request::new(
@@ -134,14 +147,34 @@ impl winit::application::ApplicationHandler for TrayApp {
                 UpdateConfig::load(Path::new(guidance_update::DEFAULT_CONFIG)).and_then(|cfg| {
                     self.runtime.block_on(async {
                         let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
-                        Ok((cfg.channel, guidance_update::check(&cfg, &current).await?))
+                        let source = guidance_update::GitHubReleases::new();
+                        Ok(guidance_update::check_all(&source, &cfg, &current).await)
                     })
                 });
             match outcome {
-                Ok((c, Some(u))) => self
-                    .check
-                    .set_text(format!("Update available: {} ({})", u.version, c)),
-                Ok((c, None)) => self.check.set_text(format!("Up to date ({c})")),
+                Ok(run) => {
+                    let available: Vec<_> = run
+                        .targets
+                        .iter()
+                        .filter(|t| t.state == guidance_update::TargetState::UpdateAvailable)
+                        .collect();
+                    let text = if available.is_empty() {
+                        "Up to date".to_string()
+                    } else {
+                        let parts: Vec<String> = available
+                            .iter()
+                            .map(|t| {
+                                format!(
+                                    "{} {}",
+                                    t.target,
+                                    t.offered_version.as_deref().unwrap_or("?")
+                                )
+                            })
+                            .collect();
+                        format!("Update available: {}", parts.join(", "))
+                    };
+                    self.check.set_text(text);
+                }
                 Err(_) => self.check.set_text("Update check failed"),
             };
         }

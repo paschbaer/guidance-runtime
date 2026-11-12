@@ -47,10 +47,16 @@ enum UpdateCommand {
     Check {
         #[arg(long,default_value=guidance_update::DEFAULT_CONFIG)]
         config: PathBuf,
+        /// Check only this target. Omitted means every configured target.
+        #[arg(long)]
+        target: Option<String>,
     },
     Install {
         #[arg(long,default_value=guidance_update::DEFAULT_CONFIG)]
         config: PathBuf,
+        /// Install only this target. Omitted means every target with an update.
+        #[arg(long)]
+        target: Option<String>,
         #[arg(long)]
         yes: bool,
     },
@@ -58,6 +64,9 @@ enum UpdateCommand {
         channel: Option<Channel>,
         #[arg(long,default_value=guidance_update::DEFAULT_CONFIG)]
         config: PathBuf,
+        /// Required when more than one target is configured.
+        #[arg(long)]
+        target: Option<String>,
     },
 }
 #[tokio::main]
@@ -100,22 +109,67 @@ async fn main() -> Result<()> {
 }
 async fn update(command: UpdateCommand) -> Result<()> {
     match command {
-        UpdateCommand::Channel { channel, config } => {
-            println!("{}", guidance_update::set_or_get_channel(&config, channel)?)
+        UpdateCommand::Channel {
+            channel,
+            config,
+            target,
+        } => {
+            let mut cfg = UpdateConfig::load(&config)?;
+            let message =
+                guidance_update::set_or_get_channel(&mut cfg, target.as_deref(), channel)?;
+            if channel.is_some() {
+                cfg.save(&config)?;
+            }
+            println!("{message}")
         }
-        UpdateCommand::Check { config } => {
+        UpdateCommand::Check { config, target } => {
             let cfg = UpdateConfig::load(&config)?;
             let current = guidance_update::current_version()?;
-            let outcome = guidance_update::check_update(&cfg, &current).await?;
-            println!("{}", outcome.message())
+            let source = guidance_update::GitHubReleases::new();
+
+            // A file in the historical flat form keeps the historical output
+            // contract: same wording, same single-target shape (SC-001). Only
+            // an explicit [[targets]] file gets per-target lines.
+            if guidance_update::uses_legacy_output(&cfg, target.as_deref()) {
+                let only = cfg.single_target()?;
+                // `?` here is deliberate: the historical contract reported a
+                // source failure as an error with exit status 1, and an
+                // operator's existing script may depend on that distinction.
+                let outcome = guidance_update::check_update_with(&source, only, &current).await?;
+                println!("{}", outcome.message());
+                return Ok(());
+            }
+
+            let run = guidance_update::check_all(&source, &cfg, &current).await;
+            if let Some(name) = target {
+                match run.targets.iter().find(|t| t.target == name) {
+                    Some(check) => println!("{}", guidance_update::render_check(check)),
+                    None => bail!("target '{name}' is not configured"),
+                }
+                // Report the status of the target that was asked for, not of
+                // targets this run was told to ignore.
+                let status = run
+                    .targets
+                    .iter()
+                    .find(|t| t.target == name)
+                    .map(|t| t.state.is_failure())
+                    .unwrap_or(false);
+                std::process::exit(if status { 2 } else { 0 });
+            }
+            print!("{}", guidance_update::render_run(&run));
+            std::process::exit(run.exit_status() as i32);
         }
-        UpdateCommand::Install { config, yes } => {
+        UpdateCommand::Install {
+            config,
+            target,
+            yes,
+        } => {
             if !yes {
                 bail!("installation requires --yes")
             }
             #[cfg(not(windows))]
             {
-                let _ = config;
+                let _ = (config, target);
                 bail!("installation is supported on Windows only");
             }
             #[cfg(windows)]
@@ -126,18 +180,23 @@ async fn update(command: UpdateCommand) -> Result<()> {
                     .join(format!("guidance-updater-{}.exe", std::process::id()));
                 std::fs::copy(&source, &temp)
                     .with_context(|| format!("copy {}", source.display()))?;
-                OsCommand::new(&temp)
-                    .args([
-                        "--config",
-                        &config.display().to_string(),
-                        "install",
-                        "--current",
-                        &current.to_string(),
-                        "--yes",
-                        "--wait-pid",
-                        &std::process::id().to_string(),
-                    ])
-                    .spawn()?;
+                let mut args = vec![
+                    "--config".to_string(),
+                    config.display().to_string(),
+                    "install".to_string(),
+                    "--current".to_string(),
+                    current.to_string(),
+                    "--yes".to_string(),
+                    "--wait-pid".to_string(),
+                    std::process::id().to_string(),
+                ];
+                // The target selection must reach the updater; dropping it here
+                // would make the flag silently select the wrong product.
+                if let Some(name) = target {
+                    args.push("--target".to_string());
+                    args.push(name);
+                }
+                OsCommand::new(&temp).args(&args).spawn()?;
                 println!("Updater started. It will apply the update after this CLI process exits.");
             }
         }

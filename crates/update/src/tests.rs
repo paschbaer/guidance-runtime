@@ -3,7 +3,7 @@
 
 use crate::{
     check_with, download_and_verify_with, is_allowed, parse_checksum, select, Asset, Channel,
-    Downloader, Release, Releases, UpdateConfig,
+    Downloader, Release, Releases, UpdateTarget,
 };
 use anyhow::Result;
 use semver::Version;
@@ -13,6 +13,23 @@ struct FixedReleases(Vec<Release>);
 impl Releases for FixedReleases {
     fn list<'a>(&'a self, _repository: &'a str) -> crate::BoxFuture<'a, Result<Vec<Release>>> {
         Box::pin(async move { Ok(self.0.clone()) })
+    }
+}
+
+/// Fails for one repository and succeeds for the other, so a test can drive
+/// the source-error branch for exactly one target.
+struct FailingFor(&'static str, Vec<Release>);
+
+impl Releases for FailingFor {
+    fn list<'a>(&'a self, repository: &'a str) -> crate::BoxFuture<'a, Result<Vec<Release>>> {
+        let fails = repository == self.0;
+        let releases = self.1.clone();
+        Box::pin(async move {
+            if fails {
+                anyhow::bail!("simulated source failure for {repository}")
+            }
+            Ok(releases)
+        })
     }
 }
 
@@ -44,12 +61,15 @@ fn release(tag: &str, prerelease: bool, assets: &[&str]) -> Release {
     }
 }
 
-fn config(channel: Channel) -> UpdateConfig {
-    UpdateConfig {
+fn config(channel: Channel) -> UpdateTarget {
+    UpdateTarget {
+        name: "guidance-runtime".into(),
         repository: "owner/repo".into(),
+        visibility: crate::Visibility::Public,
+        credential_entry: None,
         channel,
         install_dir: "C:/tmp/install".into(),
-        service_name: "GuidanceRuntime".into(),
+        service_name: Some("GuidanceRuntime".into()),
         asset_pattern: Some("windows-x64.zip".into()),
     }
 }
@@ -287,7 +307,7 @@ fn a_pattern_that_is_not_a_suffix_yields_no_update() {
 
 #[test]
 fn an_explicit_pattern_is_used_verbatim() {
-    let cfg = UpdateConfig {
+    let cfg = UpdateTarget {
         asset_pattern: Some("windows-arm64.zip".into()),
         ..config(Channel::Stable)
     };
@@ -296,7 +316,7 @@ fn an_explicit_pattern_is_used_verbatim() {
 
 #[test]
 fn an_omitted_pattern_derives_from_the_running_architecture() {
-    let cfg = UpdateConfig {
+    let cfg = UpdateTarget {
         asset_pattern: None,
         ..config(Channel::Stable)
     };
@@ -315,7 +335,7 @@ fn an_omitted_pattern_derives_from_the_running_architecture() {
 #[test]
 fn a_blank_pattern_is_rejected() {
     for blank in ["", "   ", "\t"] {
-        let cfg = UpdateConfig {
+        let cfg = UpdateTarget {
             asset_pattern: Some(blank.into()),
             ..config(Channel::Stable)
         };
@@ -326,7 +346,7 @@ fn a_blank_pattern_is_rejected() {
 
 #[test]
 fn a_pattern_without_the_zip_suffix_is_rejected() {
-    let cfg = UpdateConfig {
+    let cfg = UpdateTarget {
         asset_pattern: Some("windows-x64".into()),
         ..config(Channel::Stable)
     };
@@ -336,7 +356,7 @@ fn a_pattern_without_the_zip_suffix_is_rejected() {
 
 #[test]
 fn a_pattern_with_surrounding_whitespace_is_trimmed() {
-    let cfg = UpdateConfig {
+    let cfg = UpdateTarget {
         asset_pattern: Some("  windows-x64.zip ".into()),
         ..config(Channel::Stable)
     };
@@ -345,22 +365,25 @@ fn a_pattern_with_surrounding_whitespace_is_trimmed() {
 
 #[test]
 fn changing_the_channel_preserves_an_explicit_asset_pattern() {
-    // set_or_get_channel rewrites the whole file; an operator override must
-    // survive that round trip.
+    // Saving and reloading must not drop an operator override.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("updates.toml");
-    UpdateConfig {
+    let cfg = crate::UpdateConfig::from_file(crate::ConfigFile {
+        repository: Some("owner/repo".into()),
         asset_pattern: Some(ARM64.into()),
-        ..config(Channel::Stable)
-    }
-    .save(&path)
+        ..Default::default()
+    })
     .unwrap();
+    cfg.save(&path).unwrap();
 
-    crate::set_or_get_channel(&path, Some(Channel::Beta)).unwrap();
+    let mut loaded = crate::UpdateConfig::load(&path).unwrap();
+    crate::set_or_get_channel(&mut loaded, None, Some(Channel::Beta)).unwrap();
+    loaded.save(&path).unwrap();
 
-    let reloaded = UpdateConfig::load(&path).unwrap();
-    assert_eq!(reloaded.channel, Channel::Beta);
-    assert_eq!(reloaded.asset_pattern.as_deref(), Some(ARM64));
+    let reloaded = crate::UpdateConfig::load(&path).unwrap();
+    let target = reloaded.single_target().unwrap();
+    assert_eq!(target.channel, Channel::Beta);
+    assert_eq!(target.asset_pattern.as_deref(), Some(ARM64));
 }
 
 #[test]
@@ -378,5 +401,248 @@ fn up_to_date_message_names_the_channel() {
     assert_eq!(
         crate::UpdateOutcome::UpToDate(Channel::Stable).message(),
         "No update available on stable channel"
+    );
+}
+
+// --- check_all fan-out -----------------------------------------------------
+
+use crate::{TargetState, Visibility};
+
+fn target(name: &str, visibility: Visibility) -> UpdateTarget {
+    UpdateTarget {
+        name: name.into(),
+        repository: "owner/repo".into(),
+        visibility,
+        credential_entry: if visibility == Visibility::Private {
+            Some("guidance-update".into())
+        } else {
+            None
+        },
+        channel: Channel::Stable,
+        install_dir: format!("/tmp/{name}").into(),
+        service_name: None,
+        asset_pattern: Some("windows-x64.zip".into()),
+    }
+}
+
+fn cfg_of(targets: Vec<UpdateTarget>) -> crate::UpdateConfig {
+    crate::UpdateConfig::from_config_targets(targets)
+}
+
+/// Names the target `guidance-runtime` so it reports the running version as its
+/// installed version. A target under any other name is reported as
+/// `not_installed` until the per-target marker lands (T028).
+fn runtime_target(visibility: Visibility) -> UpdateTarget {
+    runtime_target_named(crate::LEGACY_TARGET_NAME, visibility)
+}
+
+fn runtime_target_named(name: &str, visibility: Visibility) -> UpdateTarget {
+    UpdateTarget {
+        name: name.into(),
+        repository: "owner/repo".into(),
+        visibility,
+        credential_entry: if visibility == Visibility::Private {
+            Some("guidance-update".into())
+        } else {
+            None
+        },
+        channel: Channel::Stable,
+        install_dir: format!("/tmp/{name}").into(),
+        service_name: Some("GuidanceRuntime".into()),
+        asset_pattern: Some("windows-x64.zip".into()),
+    }
+}
+
+/// FR-008 / SC-002: with two targets configured, both are checked even when
+/// the first one fails, and the run reports one result per target.
+#[tokio::test]
+async fn check_all_reports_one_result_per_target_and_isolates_failures() {
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let cfg = cfg_of(vec![
+        runtime_target(Visibility::Public),
+        target("second-target", Visibility::Public),
+    ]);
+
+    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+
+    assert_eq!(run.targets.len(), 2, "n targets must yield n checks");
+    assert_eq!(run.targets[0].target, crate::LEGACY_TARGET_NAME);
+    assert_eq!(run.targets[1].target, "second-target");
+    // A foreign target without a version marker is reported honestly rather
+    // than borrowing the runtime's version (T028 supplies the real marker).
+    assert_eq!(run.targets[1].state, TargetState::NotInstalled);
+}
+
+/// A target that is not this binary's own product reports `not_installed` and
+/// never claims the running crate version as its installed version.
+#[tokio::test]
+async fn a_foreign_target_is_not_installed_and_carries_no_version() {
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let cfg = cfg_of(vec![target("guidance", Visibility::Public)]);
+
+    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+
+    let check = &run.targets[0];
+    assert_eq!(check.state, TargetState::NotInstalled);
+    assert_eq!(check.installed_version, None);
+    assert_eq!(check.offered_version, None);
+    // Not installed is not a failure: nothing is wrong, there is just no local
+    // installation to compare against.
+    assert_eq!(run.exit_status(), 0);
+}
+
+/// The private-target interim rule (superseded by T022). This test exists so a
+/// refactor cannot silently turn a missing capability into "up to date", which
+/// is exactly the misreport FR-013 forbids. When T022 lands, this test moves to
+/// asserting the real credential path.
+#[tokio::test]
+async fn a_private_target_reports_inaccessible_with_the_verbatim_phrase() {
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let cfg = cfg_of(vec![runtime_target(Visibility::Private)]);
+
+    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+
+    let check = &run.targets[0];
+    assert_eq!(check.state, TargetState::Inaccessible);
+    assert_eq!(check.detail.as_deref(), Some("no access to update source"));
+    assert!(
+        check.offered_version.is_none(),
+        "an inaccessible target must not advertise an offered version"
+    );
+    assert_eq!(run.exit_status(), 2);
+}
+
+/// A public target with a newer permitted release reports the offered version,
+/// proving the fan-out wires selection through to the aggregate.
+#[tokio::test]
+async fn a_public_target_with_a_newer_release_reports_update_available() {
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let cfg = cfg_of(vec![runtime_target(Visibility::Public)]);
+
+    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+
+    assert_eq!(run.targets[0].state, TargetState::UpdateAvailable);
+    assert_eq!(run.targets[0].offered_version.as_deref(), Some("2.0.0"));
+    assert_eq!(run.targets[0].installed_version.as_deref(), Some("1.0.0"));
+    assert_eq!(run.exit_status(), 0);
+}
+
+/// No newer release means up to date, which is distinct from inaccessible.
+#[tokio::test]
+async fn a_public_target_with_no_newer_release_is_up_to_date() {
+    let source = FixedReleases(vec![release("v1.0.0", false, &[X64])]);
+    let cfg = cfg_of(vec![runtime_target(Visibility::Public)]);
+
+    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+
+    assert_eq!(run.targets[0].state, TargetState::UpToDate);
+    assert_eq!(run.exit_status(), 0);
+}
+
+/// Exit status 2 for a partial failure (FR-026): one target reports an access
+/// problem while another is perfectly fine.
+#[tokio::test]
+async fn a_run_with_a_mixed_outcome_exits_two() {
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let cfg = cfg_of(vec![
+        runtime_target(Visibility::Public),
+        runtime_target_named("private-runtime", Visibility::Private),
+    ]);
+
+    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+
+    assert_eq!(run.targets[0].state, TargetState::UpdateAvailable);
+    assert_eq!(run.targets[1].state, TargetState::Inaccessible);
+    assert_eq!(run.exit_status(), 2);
+}
+
+/// SC-002 in the direction that matters: the FIRST source unreachable must not
+/// stop the SECOND from being checked. This drives the source-error branch,
+/// which FixedReleases cannot reach.
+#[tokio::test]
+async fn an_unreachable_first_source_does_not_stop_the_second() {
+    let mut failing = runtime_target(Visibility::Public);
+    failing.repository = "broken/repo".into();
+    let mut healthy = runtime_target_named("second-runtime", Visibility::Public);
+    healthy.repository = "healthy/repo".into();
+
+    let source = FailingFor("broken/repo", vec![release("v2.0.0", false, &[X64])]);
+    let cfg = cfg_of(vec![failing, healthy]);
+
+    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+
+    assert_eq!(run.targets.len(), 2);
+    assert_eq!(run.targets[0].state, TargetState::NetworkError);
+    assert_eq!(run.targets[1].target, "second-runtime");
+    assert_eq!(
+        run.targets[1].state,
+        TargetState::NotInstalled,
+        "the second target must still be reached after the first fails"
+    );
+}
+
+/// The routing predicate must also say no to an explicit [[targets]] file with
+/// a single entry: such a file asks for the per-target shape even though it
+/// holds one target.
+#[tokio::test]
+async fn an_explicit_targets_file_uses_the_per_target_shape() {
+    let cfg = crate::UpdateConfig::parse(
+        "[[targets]]\nname = \"solo\"\nrepository = \"A/A\"\ninstall_dir = \"/a\"\n",
+    )
+    .unwrap();
+
+    assert!(
+        !crate::uses_legacy_output(&cfg, None),
+        "an explicit [[targets]] file must not fall back to the legacy wording"
+    );
+}
+
+// --- legacy equivalence (SC-001) -------------------------------------------
+
+/// SC-001: a configuration containing only the legacy flat keys must produce
+/// exactly the outcome the pre-feature code produced, and the CLI must route
+/// such a file through that path rather than through per-target rendering.
+///
+/// The message strings are pinned literally against the pre-change binary's
+/// output, not derived from the implementation, so a wording drift fails the
+/// test instead of following it.
+#[tokio::test]
+async fn a_legacy_flat_configuration_produces_the_historical_outcome() {
+    let cfg =
+        crate::UpdateConfig::parse("repository = \"owner/repo\"\nchannel = \"stable\"\n").unwrap();
+
+    // The single target is the historical one, under the historical name.
+    let only = cfg.single_target().unwrap();
+    assert_eq!(only.name, crate::LEGACY_TARGET_NAME);
+    assert_eq!(only.channel, Channel::Stable);
+    // The flag the CLI branches on to keep the historical output contract.
+    // This is the routing decision itself, not a model-level detail: an
+    // independent review showed that a mutation of the per-target renderer
+    // passed every other test while the binary printed different text, because
+    // nothing pinned the choice between the two output paths.
+    assert!(
+        crate::uses_legacy_output(&cfg, None),
+        "a flat file must be recognised as the legacy shape"
+    );
+    assert!(
+        !crate::uses_legacy_output(&cfg, Some(crate::LEGACY_TARGET_NAME)),
+        "naming a target is an explicit request for the per-target shape"
+    );
+
+    // Up to date: the exact pre-change wording, including the channel name.
+    let source = FixedReleases(vec![release("v1.0.0", false, &[X64])]);
+    let outcome = crate::check_update_with(&source, only, &v("1.0.0"))
+        .await
+        .unwrap();
+    assert_eq!(outcome.message(), "No update available on stable channel");
+
+    // Update available: the exact pre-change wording for the other branch.
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let outcome = crate::check_update_with(&source, only, &v("1.0.0"))
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.message(),
+        "Update available: 1.0.0 -> 2.0.0 (stable)"
     );
 }
