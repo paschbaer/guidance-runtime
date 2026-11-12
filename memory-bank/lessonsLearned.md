@@ -37,7 +37,12 @@ For every lesson, include:
   before pushing, and read the CI result for *both* OSes — an Ubuntu-only green is not success.
 - **Evidence:** `crates/update/src/lib.rs`, `crates/cli/src/main.rs`,
   `.github/workflows/ci.yml`
-- **Status:** Validated
+- **Recurrence 2026-11-12 (SOLID refactor):** `crates/update/src/install.rs` imported
+  `std::{fs, path::Path}` unconditionally while every use sat inside `#[cfg(windows)]` arms. The
+  Windows clippy run stayed green; Ubuntu failed with `unused_imports`. Fixed by gating the import.
+  The stronger action is now: when adding or moving code behind any `cfg(...)` gate, import inside
+  the gated block instead of at module level, so the other platform cannot see an unused import.
+- **Status:** Validated (twice)
 
 ### Generated configuration must be written byte-exactly
 
