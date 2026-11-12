@@ -1,219 +1,149 @@
-name: Build and Release
+name: Runtime Release v3
 
 on:
   push:
     branches: [main, develop]
     paths:
-      - "crates/**"
-      - "config/**"
-      - "scripts/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".github/workflows/release.yml"
+      - 'crates/**'
+      - 'config/**'
+      - 'scripts/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/release.yml'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: runtime-release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
+  VERSION_MAJOR: '1'
+  VERSION_MINOR: '3'
   CARGO_TERM_COLOR: always
-  TARGET: x86_64-pc-windows-msvc
-  VERSION_MAJOR: "1"
-  VERSION_MINOR: "3"
 
 jobs:
-  build:
+  metadata:
     if: ${{ !contains(github.event.head_commit.message || '', '[skip release]') }}
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
-      channel: ${{ steps.version.outputs.channel }}
-      prerelease: ${{ steps.version.outputs.prerelease }}
-      tag_exists: ${{ steps.tag_check.outputs.exists }}
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      channel: ${{ steps.meta.outputs.channel }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - id: meta
+        run: |
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            VERSION="$VERSION_MAJOR.$VERSION_MINOR.$GITHUB_RUN_NUMBER"
+            CHANNEL=stable
+            PRE=false
+          else
+            VERSION="$VERSION_MAJOR.$VERSION_MINOR.0-beta.$GITHUB_RUN_NUMBER"
+            CHANNEL=beta
+            PRE=true
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "channel=$CHANNEL" >> $GITHUB_OUTPUT
+          echo "prerelease=$PRE" >> $GITHUB_OUTPUT
 
+  build:
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: windows-x64
+          - target: aarch64-pc-windows-msvc
+            arch: windows-arm64
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.target }}
           components: rustfmt, clippy
-
       - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+      - run: cargo test --workspace --target ${{ matrix.target }}
+      - run: cargo build --workspace --release --target ${{ matrix.target }}
 
-      - name: Determine version and channel
-        id: version
-        shell: pwsh
-        run: |
-          $branch = "${{ github.ref_name }}"
-          $run = "${{ github.run_number }}"
-
-          if ($branch -eq "main") {
-            $version = "$env:VERSION_MAJOR.$env:VERSION_MINOR.$run"
-            $channel = "stable"
-            $prerelease = "false"
-          }
-          elseif ($branch -eq "develop") {
-            $version = "$env:VERSION_MAJOR.$env:VERSION_MINOR.0-beta.$run"
-            $channel = "beta"
-            $prerelease = "true"
-          }
-          else {
-            throw "Unsupported release branch: $branch"
-          }
-
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "tag=v$version" >> $env:GITHUB_OUTPUT
-          "channel=$channel" >> $env:GITHUB_OUTPUT
-          "prerelease=$prerelease" >> $env:GITHUB_OUTPUT
-          "VERSION=$version" >> $env:GITHUB_ENV
-          "CHANNEL=$channel" >> $env:GITHUB_ENV
-
-      - name: Fetch release tags
-        shell: pwsh
-        run: git fetch --tags --force
-
-      - name: Reject duplicate version tag or release
-        id: tag_check
+      - name: Package Runtime Layout
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+          CHANNEL: ${{ needs.metadata.outputs.channel }}
         run: |
-          $localTag = git tag --list $env:RELEASE_TAG
-          $remoteTag = git ls-remote --tags origin "refs/tags/$env:RELEASE_TAG"
-          gh release view $env:RELEASE_TAG --repo "${{ github.repository }}" *> $null
-          $releaseExists = $LASTEXITCODE -eq 0
-
-          if ($localTag -or $remoteTag -or $releaseExists) {
-            "exists=true" >> $env:GITHUB_OUTPUT
-            throw "Release version $env:RELEASE_TAG already exists. Git tags and release assets are immutable; increment the version source or use a new workflow run number."
-          }
-
-          "exists=false" >> $env:GITHUB_OUTPUT
-
-      - name: Validate
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --workspace --all-targets --target ${{ env.TARGET }} -- -D warnings
-          cargo test --workspace --target ${{ env.TARGET }}
-
-      - name: Build
-        run: cargo build --workspace --release --target ${{ env.TARGET }}
-
-      - name: Package
-        shell: pwsh
-        run: |
-          $name = "guidance-runtime-$env:VERSION-windows-x64"
+          $name = "guidance-runtime-$env:VERSION-${{ matrix.arch }}"
           $root = "dist/$name"
-          $bin = "target/$env:TARGET/release"
-          New-Item -ItemType Directory -Force "$root/bin", "$root/config", "$root/docs" | Out-Null
+          New-Item -ItemType Directory -Force "$root/bin","$root/config","$root/docs" | Out-Null
 
-          Copy-Item "$bin/guidance-service.exe" "$root/bin"
-          Copy-Item "$bin/guidance.exe" "$root/bin"
-          Copy-Item "$bin/guidance-tray.exe" "$root/bin"
-          Copy-Item "$bin/guidance-updater.exe" "$root/bin"
-          Copy-Item "config/*.example.toml" "$root/config"
-          Copy-Item "docs/*" "$root/docs" -Recurse
-          Copy-Item "README.md", "README.de.md" "$root"
+          Copy-Item "target/${{ matrix.target }}/release/*.exe" "$root/bin" -ErrorAction SilentlyContinue
+          if (Test-Path "config") { Copy-Item "config/*" "$root/config" -Recurse -ErrorAction SilentlyContinue }
+          if (Test-Path "docs") { Copy-Item "docs/*" "$root/docs" -Recurse -ErrorAction SilentlyContinue }
+          if (Test-Path "README.md") { Copy-Item "README.md" "$root" }
+          if (Test-Path "README.de.md") { Copy-Item "README.de.md" "$root" }
 
           @{
             version = $env:VERSION
             channel = $env:CHANNEL
-            branch = "${{ github.ref_name }}"
-            commit = "${{ github.sha }}"
-            runNumber = "${{ github.run_number }}"
-            publishedAt = (Get-Date).ToUniversalTime().ToString("o")
+            target = '${{ matrix.target }}'
+            commit = '${{ github.sha }}'
+            runNumber = '${{ github.run_number }}'
           } | ConvertTo-Json | Out-File "$root/release.json" -Encoding utf8
 
           Compress-Archive -Path $root -DestinationPath "dist/$name.zip"
-          $archive = "dist/$name.zip"
-          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash
-          "$hash  $([IO.Path]::GetFileName($archive))" |
-            Out-File "dist/guidance-runtime-$env:VERSION-SHA256SUMS.txt" -Encoding ascii
+          $hash=(Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash
+          "$hash  $name.zip" | Out-File "dist/$name-SHA256SUMS.txt" -Encoding ascii
 
       - uses: actions/upload-artifact@v4
         with:
-          name: guidance-runtime-${{ steps.version.outputs.channel }}-${{ steps.version.outputs.version }}
-          path: |
-            dist/*.zip
-            dist/*SHA256SUMS.txt
-          if-no-files-found: error
-          retention-days: 14
+          name: ${{ matrix.arch }}
+          path: dist/*
 
   publish:
-    needs: build
-    if: needs.build.outputs.tag_exists == 'false'
+    needs: [metadata, build]
     runs-on: ubuntu-latest
-    environment: ${{ needs.build.outputs.channel }}
-
+    environment: ${{ needs.metadata.outputs.channel }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - uses: actions/download-artifact@v4
         with:
-          name: guidance-runtime-${{ needs.build.outputs.channel }}-${{ needs.build.outputs.version }}
           path: dist
-
-      - name: Re-check duplicate tag immediately before publication
+          merge-multiple: true
+      - name: Protect Immutable Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          TAG: ${{ needs.metadata.outputs.tag }}
         run: |
           git fetch --tags --force
-          if git rev-parse "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Tag $RELEASE_TAG already exists. Refusing to overwrite it."
-            exit 1
-          fi
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists. Refusing to overwrite it."
-            exit 1
-          fi
-
-      - name: Create immutable release tag
+          git rev-parse "$TAG" >/dev/null 2>&1 && exit 1 || true
+          gh release view "$TAG" >/dev/null 2>&1 && exit 1 || true
+      - name: Create Tag
         env:
-          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          TAG: ${{ needs.metadata.outputs.tag }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$RELEASE_TAG" "${{ github.sha }}" -m "Guidance Runtime $RELEASE_TAG"
-          git push origin "refs/tags/$RELEASE_TAG"
-
-      - name: Publish beta release
-        if: needs.build.outputs.prerelease == 'true'
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag -a "$TAG" "$GITHUB_SHA" -m "Guidance Runtime $TAG"
+          git push origin "refs/tags/$TAG"
+      - name: Publish Beta
+        if: needs.metadata.outputs.prerelease == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.build.outputs.tag }}
-          RELEASE_VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          gh release create "$RELEASE_TAG" dist/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --generate-notes \
-            --prerelease \
-            --latest=false \
-            --title "Guidance Runtime $RELEASE_VERSION Beta"
-
-      - name: Publish stable release
-        if: needs.build.outputs.prerelease == 'false'
+        run: gh release create "${{ needs.metadata.outputs.tag }}" dist/* --verify-tag --prerelease --generate-notes --latest=false --title "Guidance Runtime ${{ needs.metadata.outputs.version }} Beta"
+      - name: Publish Stable
+        if: needs.metadata.outputs.prerelease == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.build.outputs.tag }}
-          RELEASE_VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          gh release create "$RELEASE_TAG" dist/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --generate-notes \
-            --latest \
-            --title "Guidance Runtime $RELEASE_VERSION"
+        run: gh release create "${{ needs.metadata.outputs.tag }}" dist/* --verify-tag --latest --generate-notes --title "Guidance Runtime ${{ needs.metadata.outputs.version }}"
