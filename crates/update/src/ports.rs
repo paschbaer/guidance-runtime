@@ -6,6 +6,7 @@
 
 use crate::{Release, UpdateTarget};
 use anyhow::Result;
+use semver::Version;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -63,9 +64,12 @@ pub trait Downloader: Send + Sync {
 ///
 /// The resolved target is passed instead of the whole configuration: an
 /// installer that has to re-derive which target it is installing is exactly
-/// the ambiguity that lets one target's files land in another's directory.
+/// the ambiguity that lets one target's files land in another's directory. The
+/// version is passed too because the installer is the component that records a
+/// successful installation in the marker; a caller-supplied version after the
+/// fact would allow the marker and the files to disagree.
 pub trait Installer {
-    fn install(&self, target: &UpdateTarget, bytes: &[u8]) -> Result<()>;
+    fn install(&self, target: &UpdateTarget, version: &Version, bytes: &[u8]) -> Result<()>;
 }
 
 /// An access token whose value cannot be printed by accident.

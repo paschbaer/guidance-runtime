@@ -79,6 +79,40 @@ pub async fn check_update(
     }
 }
 
+/// Builds the per-target check a legacy outcome represents.
+///
+/// The legacy path renders its historical message by default, but an operator
+/// who asks for JSON must get a document in the same shape as the multi-target
+/// one. The conversion is centralised so both binaries map the two historical
+/// outcomes identically and neither can invent a different installed/offered
+/// pair.
+pub fn check_from_outcome(
+    target: &UpdateTarget,
+    outcome: &UpdateOutcome,
+    current: &Version,
+) -> crate::TargetCheck {
+    use crate::{TargetCheck, TargetState};
+
+    match outcome {
+        UpdateOutcome::Available(update) => TargetCheck::new(
+            &target.name,
+            TargetState::UpdateAvailable,
+            Some(update.current.to_string()),
+            Some(update.version.to_string()),
+            update.channel.to_string(),
+            None,
+        ),
+        UpdateOutcome::UpToDate(channel) => TargetCheck::new(
+            &target.name,
+            TargetState::UpToDate,
+            Some(current.to_string()),
+            None,
+            channel.to_string(),
+            None,
+        ),
+    }
+}
+
 /// The same outcome against an arbitrary [`crate::Releases`] port.
 ///
 /// This is the historical single-target path, kept separately so the legacy
@@ -142,7 +176,6 @@ async fn token_for(
     store: &dyn crate::CredentialStore,
     target: &UpdateTarget,
 ) -> std::result::Result<Option<crate::Secret>, (crate::TargetState, Option<String>)> {
-    use crate::SERVICE;
     use crate::{TargetState, Visibility};
 
     if target.visibility != Visibility::Private {
@@ -167,12 +200,46 @@ async fn token_for(
             TargetState::Inaccessible,
             Some(format!(
                 "no access to update source: no credential named '{entry}' is provisioned \
-                 on this machine; provision it as '{SERVICE}:{entry}'"
+                 on this machine; {}",
+                crate::credentials::provision_hint(entry)
             )),
         )),
         // The store itself could not be consulted: a different remedy, so a
         // different state.
         Err(e) => Err((TargetState::CredentialStoreUnavailable, Some(e.to_string()))),
+    }
+}
+
+/// The installed version for a target, from its marker or the transitional
+/// rule.
+///
+/// Used by both the check fan-out and the install orchestration so the two
+/// cannot disagree about what is installed.
+fn installed_version(target: &UpdateTarget, current: &Version) -> Option<String> {
+    use crate::LEGACY_TARGET_NAME;
+
+    match crate::marker::read_version(&target.install_dir, &target.name) {
+        Some(version) => Some(version),
+        None => {
+            // Transitional rule: an installation that predates the marker must
+            // not regress to "not installed". It applies only when the marker
+            // is genuinely ABSENT: a corrupt or mismatched marker is not an
+            // installation without a marker and must resolve to not_installed.
+            // Scoped to the runtime target, because the running CLI's version
+            // is only the runtime's version; claiming it for a foreign product
+            // would be a false reading. Removal trigger: delete once every
+            // install path writes a marker (see
+            // `marker::legacy_runtime_present`).
+            let absent = crate::marker::read_state(&target.install_dir).is_absent();
+            if absent
+                && target.name == LEGACY_TARGET_NAME
+                && crate::marker::legacy_runtime_present(&target.install_dir)
+            {
+                Some(current.to_string())
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -184,18 +251,9 @@ async fn check_one(
     target: &UpdateTarget,
     current: &Version,
 ) -> crate::TargetCheck {
-    use crate::{TargetCheck, TargetState, LEGACY_TARGET_NAME};
+    use crate::{TargetCheck, TargetState};
 
-    // Only the target this binary belongs to can report the running version as
-    // its installed version. Any other product runs a different release, and
-    // claiming this crate's version for it would be a false reading of FR-007.
-    // Until the per-target version marker lands (T028), a foreign target is
-    // reported as not installed, which is the honest answer.
-    let installed = if target.name == LEGACY_TARGET_NAME {
-        Some(current.to_string())
-    } else {
-        None
-    };
+    let installed = installed_version(target, current);
 
     // Access is resolved BEFORE the installed-version question, by operator
     // decision: a user without a credential cannot obtain the product at all,
@@ -312,10 +370,42 @@ async fn check_one(
         }
     };
 
+    // The baseline for "is this newer?" is the installed version read from the
+    // marker, not the running binary's version. Using `current` here would
+    // offer a downgrade (or re-offer the installed version) for any target
+    // whose installation differs from this CLI's own release.
+    let baseline = match installed.as_deref() {
+        Some(text) => match Version::parse(text) {
+            Ok(version) => version,
+            Err(e) => {
+                return TargetCheck::new(
+                    &target.name,
+                    TargetState::InvalidArtifact,
+                    installed,
+                    None,
+                    target.channel.to_string(),
+                    Some(format!("install marker names an invalid version: {e}")),
+                )
+            }
+        },
+        None => {
+            // The early branch above returns before this point, so this is a
+            // defensive path rather than a reachable state.
+            return TargetCheck::new(
+                &target.name,
+                TargetState::NotInstalled,
+                None,
+                None,
+                target.channel.to_string(),
+                None,
+            );
+        }
+    };
+
     match crate::selection::select(
         &target.repository,
         target.channel,
-        current,
+        &baseline,
         &pattern,
         expected,
         releases,
@@ -349,4 +439,143 @@ fn classify_source_error(error: &anyhow::Error) -> crate::TargetState {
         Some(crate::github::SourceError::Inaccessible) => crate::TargetState::Inaccessible,
         _ => crate::TargetState::NetworkError,
     }
+}
+
+/// What happened to one target during an install run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallEntry {
+    /// The update was downloaded, verified and installed.
+    Installed { target: String, version: String },
+    /// The target reported no newer permitted release.
+    UpToDate { target: String },
+    /// The target has no local installation, so there is nothing to update.
+    NotInstalled { target: String },
+    /// The target could not be installed; the error is actionable text.
+    Failed { target: String, error: String },
+}
+
+impl InstallEntry {
+    pub fn target(&self) -> &str {
+        match self {
+            Self::Installed { target, .. }
+            | Self::UpToDate { target }
+            | Self::NotInstalled { target }
+            | Self::Failed { target, .. } => target,
+        }
+    }
+
+    pub fn render(&self) -> String {
+        match self {
+            Self::Installed { target, version } => format!("{target}  installed {version}"),
+            Self::UpToDate { target } => format!("{target}  up to date"),
+            Self::NotInstalled { target } => format!("{target}  not installed"),
+            Self::Failed { target, error } => format!("{target}  install failed: {error}"),
+        }
+    }
+}
+
+/// The result of one install run.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InstallRun {
+    pub entries: Vec<InstallEntry>,
+}
+
+impl InstallRun {
+    /// Whether any target failed. A no-op run (up to date or not installed) is
+    /// not a failure.
+    pub fn failed(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| matches!(entry, InstallEntry::Failed { .. }))
+    }
+
+    /// `0` for a run without failures, `2` when any target failed. Configuration
+    /// and usage errors stay `1` and never reach this type.
+    pub fn exit_status(&self) -> u8 {
+        if self.failed() {
+            2
+        } else {
+            0
+        }
+    }
+
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        for entry in &self.entries {
+            out.push_str(&entry.render());
+            out.push('\n');
+        }
+        out
+    }
+}
+
+/// Installs the available update for every target the configuration selects.
+///
+/// A target is installed only when it actually reports an available update:
+/// up-to-date and not-installed targets are reported and skipped, never
+/// installed speculatively. Failures are recorded per target and are never
+/// counted as success (FR-020, FR-020b).
+pub async fn install_all(
+    source: &dyn crate::Releases,
+    downloader: &dyn crate::Downloader,
+    installer: &dyn crate::Installer,
+    store: &dyn crate::CredentialStore,
+    config: &UpdateConfig,
+    current: &Version,
+) -> InstallRun {
+    let mut entries = Vec::with_capacity(config.targets().len());
+    for target in config.targets() {
+        let token = match token_for(store, target).await {
+            Ok(token) => token,
+            Err((_, detail)) => {
+                entries.push(InstallEntry::Failed {
+                    target: target.name.clone(),
+                    error: detail.unwrap_or_else(|| "no access to update source".to_string()),
+                });
+                continue;
+            }
+        };
+
+        // A target with no local installation is not an update candidate. This
+        // mirrors check_one, so the two paths cannot disagree.
+        if installed_version(target, current).is_none() {
+            entries.push(InstallEntry::NotInstalled {
+                target: target.name.clone(),
+            });
+            continue;
+        }
+
+        match crate::check_with(source, target, token.as_ref(), current).await {
+            Ok(Some(update)) => {
+                let result = match crate::download_and_verify_with(
+                    downloader,
+                    &update,
+                    token.as_ref(),
+                )
+                .await
+                {
+                    Ok(bytes) => installer.install(target, &update.version, &bytes),
+                    Err(e) => Err(e),
+                };
+                match result {
+                    Ok(()) => entries.push(InstallEntry::Installed {
+                        target: target.name.clone(),
+                        version: update.version.to_string(),
+                    }),
+                    Err(e) => entries.push(InstallEntry::Failed {
+                        target: target.name.clone(),
+                        error: e.to_string(),
+                    }),
+                }
+            }
+            Ok(None) => entries.push(InstallEntry::UpToDate {
+                target: target.name.clone(),
+            }),
+            Err(e) => entries.push(InstallEntry::Failed {
+                target: target.name.clone(),
+                error: e.to_string(),
+            }),
+        }
+    }
+    InstallRun { entries }
 }

@@ -23,6 +23,7 @@ semver={version="1",features=["serde"]}
 sha2="0.10"
 zip="2"
 tempfile="3"
+time={version="0.3",features=["formatting","parsing"]}
 url="2"
 windows-sys={version="0.59",features=["Win32_Foundation","Win32_Security","Win32_Security_Credentials"]}
 

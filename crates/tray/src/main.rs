@@ -153,31 +153,83 @@ impl winit::application::ApplicationHandler for TrayApp {
                     })
                 });
             match outcome {
-                Ok(run) => {
-                    let available: Vec<_> = run
-                        .targets
-                        .iter()
-                        .filter(|t| t.state == guidance_update::TargetState::UpdateAvailable)
-                        .collect();
-                    let text = if available.is_empty() {
-                        "Up to date".to_string()
-                    } else {
-                        let parts: Vec<String> = available
-                            .iter()
-                            .map(|t| {
-                                format!(
-                                    "{} {}",
-                                    t.target,
-                                    t.offered_version.as_deref().unwrap_or("?")
-                                )
-                            })
-                            .collect();
-                        format!("Update available: {}", parts.join(", "))
-                    };
-                    self.check.set_text(text);
-                }
+                Ok(run) => self.check.set_text(check_summary(&run)),
                 Err(_) => self.check.set_text("Update check failed"),
             };
         }
+    }
+}
+
+/// Summarises a check run for the tray label.
+///
+/// A failure must never be reported as "Up to date": the fan-out converts
+/// source and credential failures into states instead of errors, so a run where
+/// every target failed still arrives here as `Ok`. Reporting it as up to date
+/// is the exact fail-open this feature exists to remove.
+#[cfg(windows)]
+fn check_summary(run: &guidance_update::UpdateRun) -> String {
+    use guidance_update::TargetState;
+
+    let failed: Vec<&str> = run
+        .targets
+        .iter()
+        .filter(|t| t.state.is_failure())
+        .map(|t| t.target.as_str())
+        .collect();
+    if !failed.is_empty() {
+        return format!("Update problem: {}", failed.join(", "));
+    }
+
+    let available: Vec<_> = run
+        .targets
+        .iter()
+        .filter(|t| t.state == TargetState::UpdateAvailable)
+        .collect();
+    if available.is_empty() {
+        "Up to date".to_string()
+    } else {
+        let parts: Vec<String> = available
+            .iter()
+            .map(|t| {
+                format!(
+                    "{} {}",
+                    t.target,
+                    t.offered_version.as_deref().unwrap_or("?")
+                )
+            })
+            .collect();
+        format!("Update available: {}", parts.join(", "))
+    }
+}
+
+#[cfg(all(windows, test))]
+mod tests {
+    use super::*;
+
+    fn check(name: &str, state: guidance_update::TargetState) -> guidance_update::TargetCheck {
+        guidance_update::TargetCheck::new(name, state, Some("1.0.0".into()), None, "stable", None)
+    }
+
+    /// The defect this guards: a fan-out that swallows every failure must not
+    /// reach the tray as "Up to date".
+    #[test]
+    fn an_all_failing_run_is_not_reported_as_up_to_date() {
+        let run = guidance_update::UpdateRun::new(vec![
+            check("a", guidance_update::TargetState::Inaccessible),
+            check("b", guidance_update::TargetState::NetworkError),
+        ]);
+        let summary = check_summary(&run);
+        assert!(!summary.contains("Up to date"), "{summary}");
+        assert!(summary.contains("Update problem"), "{summary}");
+        assert!(summary.contains('a') && summary.contains('b'), "{summary}");
+    }
+
+    #[test]
+    fn a_clean_run_still_reads_up_to_date() {
+        let run = guidance_update::UpdateRun::new(vec![check(
+            "a",
+            guidance_update::TargetState::UpToDate,
+        )]);
+        assert_eq!(check_summary(&run), "Up to date");
     }
 }

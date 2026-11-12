@@ -1,8 +1,16 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use guidance_update::{Channel, CredentialStore, UpdateConfig};
+use guidance_update::{Channel, UpdateConfig};
 use semver::Version;
 use std::{path::PathBuf, time::Duration};
+
+/// Output format for `check`; text is the historical default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+enum Format {
+    #[default]
+    Text,
+    Json,
+}
 #[derive(Parser)]
 #[command(version, about = "Guidance Runtime update checker and installer")]
 struct Cli {
@@ -16,6 +24,9 @@ enum Cmd {
     Check {
         #[arg(long)]
         current: Option<Version>,
+        /// Output format: human-readable text (default) or one JSON document.
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
     },
     Install {
         #[arg(long)]
@@ -44,7 +55,7 @@ async fn main() -> Result<()> {
             }
             println!("{message}")
         }
-        Cmd::Check { current } => {
+        Cmd::Check { current, format } => {
             let v = match current {
                 Some(v) => v,
                 None => guidance_update::current_version()?,
@@ -55,12 +66,23 @@ async fn main() -> Result<()> {
             if guidance_update::uses_legacy_output(&cfg, None) {
                 let only = cfg.single_target()?;
                 let outcome = guidance_update::check_update_with(&source, only, None, &v).await?;
-                println!("{}", outcome.message());
+                match format {
+                    Format::Text => println!("{}", outcome.message()),
+                    Format::Json => {
+                        let run = guidance_update::UpdateRun::new(vec![
+                            guidance_update::check_from_outcome(only, &outcome, &v),
+                        ]);
+                        println!("{}", guidance_update::render_json_now(&run)?);
+                    }
+                }
                 return Ok(());
             }
 
             let run = guidance_update::check_all(&source, &store, &cfg, &v).await;
-            print!("{}", guidance_update::render_run(&run));
+            match format {
+                Format::Text => print!("{}", guidance_update::render_run(&run)),
+                Format::Json => println!("{}", guidance_update::render_json_now(&run)?),
+            }
             std::process::exit(run.exit_status() as i32);
         }
         Cmd::Install {
@@ -79,43 +101,19 @@ async fn main() -> Result<()> {
                 Some(v) => v,
                 None => guidance_update::current_version()?,
             };
-            let resolved = match target {
-                Some(name) => cfg
-                    .targets()
-                    .iter()
-                    .find(|t| t.name == name)
-                    .with_context(|| format!("target '{name}' is not configured"))?,
-                None => cfg.single_target()?,
+            // `--target` narrows the run itself: other targets' sources and
+            // credential stores are not contacted. Omission selects every
+            // configured target; only those reporting an available update are
+            // installed.
+            let cfg = match target {
+                Some(name) => cfg.select_target(&name)?,
+                None => cfg,
             };
+            let source = guidance_update::GitHubReleases::new();
             let store = guidance_update::PlatformCredentialStore::new();
-            // Resolve the credential before touching the source: a private
-            // target cannot be read without one, and a public target must not
-            // consult the store at all.
-            let token = match resolved.visibility {
-                guidance_update::Visibility::Public => None,
-                guidance_update::Visibility::Private => {
-                    let entry = resolved
-                        .credential_entry
-                        .as_deref()
-                        .context("target is private but names no credential_entry")?;
-                    Some(
-                        store
-                            .get(entry)
-                            .await
-                            .map_err(|e| anyhow::anyhow!(e))?
-                            .with_context(|| {
-                                format!("no credential provisioned for entry '{entry}'")
-                            })?,
-                    )
-                }
-            };
-            let u = guidance_update::check(resolved, token.as_ref(), &v)
-                .await?
-                .context("no update available")?;
-            println!("Downloading {}", u.asset_name);
-            let b = guidance_update::download_and_verify(&u, token.as_ref()).await?;
-            guidance_update::install_archive(resolved, &b)?;
-            println!("Installed {} {}", resolved.name, u.version)
+            let run = guidance_update::install_all_default(&source, &store, &cfg, &v).await;
+            print!("{}", run.render());
+            std::process::exit(run.exit_status() as i32);
         }
     }
     Ok(())

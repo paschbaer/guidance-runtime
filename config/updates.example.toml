@@ -2,8 +2,10 @@
 #
 # Two forms are accepted. The flat form below describes a single product and is
 # read exactly as it always was: it becomes one target named "guidance-runtime",
-# and its output wording is unchanged. Use the [[targets]] form to maintain more
-# than one product with the same updater.
+# and its output wording is unchanged. It also stays flat when a channel is
+# changed; the updater never rewrites an operator's file into the array form.
+# Use the [[targets]] form to maintain more than one product with the same
+# updater. Do not mix the two forms in one file.
 
 # --- Flat form (single product) --------------------------------------------
 
@@ -17,7 +19,13 @@ service_name = "GuidanceRuntime"
 #
 # Each target names where its releases live, whether that source is public or
 # private, and where it is installed. Two targets must not share an
-# install_dir, because installing one would overwrite the other.
+# install_dir, because installing one would overwrite the other; a target's
+# install_dir must also not be another target's rollback directory.
+#
+# For a target named "guidance-runtime", an omitted service_name still means
+# the historical service "GuidanceRuntime". For any other target, omitting
+# service_name means the target has no service and its archive is installed
+# without service control.
 #
 # [[targets]]
 # name = "guidance-runtime"
@@ -32,7 +40,9 @@ service_name = "GuidanceRuntime"
 # repository = "YOUR-ORG/guidance-dist"
 # visibility = "private"
 # # The NAME of the credential store entry, never the secret itself. The secret
-# # is read from the operating system's protected per-user store.
+# # is read from the operating system's protected per-user store. Provision the
+# # token with read access to this repository's release artifacts only: never
+# # source-repository access and never write access.
 # credential_entry = "guidance-update"
 # channel = "stable"
 # install_dir = "C:/Program Files/Guidance"

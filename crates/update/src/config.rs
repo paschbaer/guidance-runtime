@@ -45,6 +45,7 @@ impl std::fmt::Display for Visibility {
 
 /// One product the updater maintains.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UpdateTarget {
     /// Stable identifier, unique per configuration.
     pub name: String,
@@ -183,6 +184,31 @@ impl UpdateConfig {
                     .join(", ")
             ),
         }
+    }
+
+    /// A one-target view of this configuration, for `--target`.
+    ///
+    /// Narrowing happens before the fan-out, not while printing: the contract
+    /// says `--target` narrows the run to one target, and a check that still
+    /// contacts every other source (and consults their credential stores) both
+    /// violates that and makes the JSON document carry more than one element.
+    /// The file shape is preserved so saving behaviour is unchanged.
+    pub fn select_target(&self, name: &str) -> Result<Self> {
+        let target = self
+            .targets
+            .iter()
+            .find(|t| t.name == name)
+            .with_context(|| {
+                format!(
+                    "target '{name}' is not configured; configured targets: {}",
+                    self.target_names().join(", ")
+                )
+            })?
+            .clone();
+        Ok(Self {
+            targets: vec![target],
+            shape: self.shape,
+        })
     }
 
     /// Parses and validates a configuration document.
@@ -349,6 +375,30 @@ fn validate(targets: &[UpdateTarget]) -> Result<()> {
         // Rejects a blank or non-.zip pattern with the field name in the
         // message, matching the shape of the other rules.
         target.resolved_asset_pattern()?;
+    }
+
+    // A rollback snapshot must not collide with another target's installation:
+    // the transaction removes an existing backup directory before copying, so
+    // such a collision would delete a product's files. `dirs` holds every
+    // install directory, so this catches both directions.
+    let mut backups: HashSet<PathBuf> = HashSet::new();
+    for target in targets {
+        let backup = crate::install::backup_path(&target.install_dir);
+        if dirs.contains(&backup) {
+            bail!(
+                "target '{}' would use '{}' as its rollback directory, which is another \
+                 target's install_dir; choose a different install_dir",
+                target.name,
+                backup.display()
+            );
+        }
+        if !backups.insert(backup.clone()) {
+            bail!(
+                "two targets would use '{}' as their rollback directory; choose install \
+                 directories whose names do not collide",
+                backup.display()
+            );
+        }
     }
     Ok(())
 }

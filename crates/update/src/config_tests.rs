@@ -411,3 +411,80 @@ fn saving_a_targets_configuration_keeps_the_array_shape() {
     assert!(text.contains("[[targets]]"), "{text}");
     assert!(text.contains("channel = \"beta\""), "{text}");
 }
+
+/// `--target` must narrow the run itself. Selecting before the fan-out is what
+/// makes the JSON document carry exactly one element and stops the updater from
+/// reading sources or credential stores the operator excluded.
+#[test]
+fn select_target_narrows_to_exactly_one_target() {
+    let cfg = parse(
+        r#"
+[[targets]]
+name = "a"
+repository = "A/A"
+install_dir = "/a"
+
+[[targets]]
+name = "b"
+repository = "B/B"
+install_dir = "/b"
+"#,
+    )
+    .unwrap();
+
+    let only = cfg.select_target("b").unwrap();
+    assert_eq!(only.target_names(), vec!["b"]);
+
+    let err = cfg.select_target("missing").unwrap_err().to_string();
+    assert!(err.contains("missing"), "{err}");
+    assert!(err.contains('a') && err.contains('b'), "{err}");
+}
+
+/// FR-020 hazards are reachable by a typo: an ignored `instal_dir` would make a
+/// second target fall back to the runtime's directory, and an ignored
+/// `service_nam` would make it control the runtime's service. Reject unknown
+/// keys inside a target instead of silently defaulting them.
+#[test]
+fn a_misspelled_target_key_is_rejected() {
+    let err = format!(
+        "{:#}",
+        parse(
+            r#"
+[[targets]]
+name = "a"
+repository = "A/A"
+instal_dir = "/a"
+"#,
+        )
+        .unwrap_err()
+    );
+    assert!(err.contains("instal_dir"), "{err}");
+}
+
+/// A rollback snapshot is removed before it is recreated, so it must never be
+/// another target's install directory. The old `with_extension("backup")`
+/// derivation made `App.backup` the snapshot of `App.Prod`; this pins the
+/// validation that makes the collision impossible.
+#[test]
+fn a_rollback_directory_may_not_collide_with_an_install_dir() {
+    let err = parse(
+        r#"
+[[targets]]
+name = "product-a"
+repository = "A/A"
+install_dir = "/apps/App.Prod.backup"
+
+[[targets]]
+name = "product-b"
+repository = "B/B"
+install_dir = "/apps/App.Prod"
+"#,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("rollback directory"), "{err}");
+    assert!(
+        err.contains("product-b") || err.contains("product-a"),
+        "{err}"
+    );
+}

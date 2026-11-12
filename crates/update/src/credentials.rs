@@ -21,6 +21,38 @@ use crate::ports::{BoxFuture, CredentialStore, CredentialStoreError, Secret};
 /// disagree about the namespace.
 pub const SERVICE: &str = "guidance-update";
 
+/// The operator-facing instruction for provisioning `entry` on this platform.
+///
+/// The Windows target string is `guidance:update:<entry>` (the lookup in
+/// `windows_backend::read`), which is *not* the same shape as the macOS/Linux
+/// service/username pair. One function keeps the hint and the lookup from
+/// drifting apart, which is exactly what happened when the hint reused
+/// [`SERVICE`] on Windows.
+pub fn provision_hint(entry: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!(
+            "provision it as the generic Credential Manager credential \
+             'guidance:update:{entry}'"
+        )
+    }
+    #[cfg(target_os = "macos")]
+    {
+        format!("provision it with: security add-generic-password -s {SERVICE} -a {entry} -w")
+    }
+    #[cfg(target_os = "linux")]
+    {
+        format!(
+            "provision it with: secret-tool store --label='Guidance' service {SERVICE} \
+             username {entry}"
+        )
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    {
+        format!("provision the credential-store entry '{entry}'")
+    }
+}
+
 /// A platform command that reads one credential.
 ///
 /// Pure data: the program and its arguments, never a shell string. The entry

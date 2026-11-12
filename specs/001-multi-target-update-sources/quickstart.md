@@ -125,19 +125,57 @@ success.
 
 ---
 
-## Scenario 10 — No secrets in output (NFR-4, SC-007)
+## Scenario 10 — No secrets in output and least privilege (NFR-4, SC-007, FR-023)
 
 1. Run every command from the scenarios above with the token value captured in a shell variable.
 2. Search all output, logs and error messages for that value.
 
 **Expected**: zero occurrences. The `detail` field and the human lines are checked explicitly.
 
+3. Inspect the provisioned token's scope. It must grant **read access to the release
+   artifacts of the configured artifact repository only**:
+   - `GET /repos/<artifact-repo>/releases` succeeds with the token;
+   - a request against a **private** source-code repository the token is not meant to
+     serve fails (401/403/404). If only a public repository is available, record the probe
+     as inconclusive by design: a public read succeeds without any grant and proves nothing
+     about the token's scope;
+   - no write operation is attempted; the scope review is read-only.
+
+**Expected**: the artifact read succeeds, the unrelated source repository is not readable,
+and the token carries no write permission. Record the observed scope and the two request
+results. A token that also grants source or write access is a provisioning defect, not a
+pass.
+
 ---
 
 ## Definition of done for validation
 
-- [ ] Scenarios 1–8 executed and evidenced
-- [ ] Scenario 9 executed on Windows and Linux at minimum; macOS recorded as executed or as not executed
-- [ ] Scenario 10 executed with zero matches
-- [ ] `cargo fmt`, `cargo clippy`, `cargo test` reported as run with results
-- [ ] Any scenario validated only against test doubles is labelled as such
+- [x] Scenarios 1, 2, 4 and 8 executed on Windows and evidenced below (scenario 8's marker cases included)
+- [x] Scenario 3 executed for the two-missing-source half; the unauthorized-identity half is **not executed** (no provisioned token) and is covered only by the classification unit test
+- [ ] Scenarios 5, 6 and 7 live runs: **not executed** — they require a provisioned credential and a live private artifact repository; their logic is covered by unit tests and is labelled as such
+- [x] Scenario 9 executed on Windows (`cargo test --workspace`)
+- [ ] Scenario 9 on Linux **not executed** and macOS **not executed** on this host; `macos-latest` was added to `ci.yml` but no CI run was available here
+- [ ] Scenario 10 live secret scan and least-privilege scope probe: **not executed** — no token is provisioned; the zero-occurrence property is covered by the sentinel unit test
+- [x] `cargo fmt`, `cargo clippy`, `cargo test` reported as run with results (below)
+- [x] Every scenario validated only against test doubles is labelled as such
+
+---
+
+## Validation results — 2026-11-12, Windows (debug binaries)
+
+Gates executed: `cargo fmt --all -- --check` clean, `cargo clippy --workspace --all-targets -- -D warnings` clean, `cargo test --workspace` green (141 tests in `guidance-update`, 0 failures).
+
+| Scenario | Result | Evidence / limitation |
+|---|---|---|
+| 1 — Legacy unchanged | **Executed** | Legacy text printed `No update available on stable channel`, exit `0`; `--format json` emitted one `guidance-runtime` document with `exit_status: 0`, exit `0`; a missing repository exited `1` with `no access to update source` and no document. The wording is pinned literally by `a_legacy_flat_configuration_produces_the_historical_outcome`; the pre-change binary was not rebuilt for this run. |
+| 2 — Independent targets | **Executed** | First source broken, second healthy: `probe  no access to update source` followed by `healthy  up to date (1.1.0, stable)`, exit `2`. The run did not stop at the first failure. |
+| 3 — Access outcomes distinguishable | **Partially executed** | Two non-existent public sources produced identical `state: "inaccessible"` and identical `detail: "no access to update source"` in JSON. The unauthorized-identity half needs a provisioned token and was **not executed**; `an_unauthorized_identity_and_a_missing_source_render_identically` covers the classification equality with doubles. |
+| 4 — Missing credential | **Executed** | Check reported `state: "inaccessible"` with the provisioning hint (`guidance:update:qs-missing-entry`), exit `2`. The CLI's `guidance update install --target secret --yes` starts a detached updater and exits `0` on handoff; the spawned `guidance-updater --config … install --target secret --yes` reported `install failed: no access to update source …` and exited `2`. The install directory listing was empty before and after. |
+| 5 — Private retrieval via one access path | **Not executed** | Requires a valid identity and a live private artifact repository. `selection_resolves_the_archive_to_the_authenticated_endpoint` and `an_authenticated_download_attaches_the_token_to_both_assets` cover the path with doubles. |
+| 6 — Checksum enforcement | **Not executed live** | Requires a release with an absent and a mismatching checksum. Covered by `download_refuses_an_update_without_checksum_asset`, `download_fails_on_a_mismatching_checksum` and `a_checksum_mismatch_leaves_the_install_dir_and_marker_unchanged`; the last test asserts the install directory and marker are untouched. |
+| 7 — Target isolation | **Not executed live** | Requires installing a real target. `install_all_installs_only_update_available_targets` and `install_all_over_a_narrowed_configuration_touches_one_target` cover the per-target selection with doubles. The Windows service-state half (the runtime service is not stopped by another target's install) is **not covered by any automated test**: service control is not behind a port, so a test cannot intercept `sc.exe`. No real target was installed on this host. |
+| 8 — Version marker | **Executed** | Marker `1.1.0` → `up to date (1.1.0, stable)`; no marker and no executable → `not installed`; `guidance-service.exe` without a marker → `up to date (1.1.0, stable)` (transitional rule); a marker naming another target plus the service executable → `not installed`; a foreign target with a valid marker → `up to date (1.1.0, stable)`. |
+| 9 — Platform coverage | **Windows executed; Linux/macOS not executed** | `cargo test --workspace` green on Windows. No Linux or macOS host is available here; `.github/workflows/ci.yml` now includes `macos-latest`, but this session did not run CI. |
+| 10 — No secrets / least privilege | **Partially executed** | No token is provisioned, so the live scan and the scope probe were **not executed**. `no_rendering_path_contains_the_credential_value` runs the real check pipeline with a sentinel and finds zero occurrences in text, JSON, `Secret` Debug/Display and `AuthenticatedAsset` Debug. The least-privilege statement is documented as a provisioning rule; the updater cannot verify token scope. |
+
+Not executed is not passed. Every row above states which half was measured and which half is covered only by a test double.

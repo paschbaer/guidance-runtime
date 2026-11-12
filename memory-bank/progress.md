@@ -32,11 +32,15 @@ depend on input from the maintainers.
 - [x] Implement feature 001 phase 4: CredentialStore port with three platform backends,
       authenticated GitHub adapter over the API asset endpoint, and credential wiring in the check
       path. Workspace tests 91 → 109.
+- [x] Implement feature 001 phases 5-7 (T023-T040): structured text and JSON output with
+      `--format text|json`, the `install.json` version marker as the installed-version source,
+      the shared transactional per-target installer (service-less targets included, marker written
+      last, full rollback), per-target install orchestration, the macOS CI leg, and the operator
+      documentation in both languages plus the quickstart validation record. Workspace tests
+      109 → 160 (141 in `guidance-update`).
 
 ## In Progress
 
-- [ ] Feature 001 User Stories 3-4 (T023-T040): structured output, per-target installation, macOS
-      CI leg, operator documentation.
 - [ ] Complete `projectBrief.md` (owner and primary users still open).
 - [ ] Document user needs and domain rules in `productContext.md`.
 
@@ -44,19 +48,26 @@ depend on input from the maintainers.
 
 - [ ] Define the first milestone and acceptance criteria.
 - [ ] Add a service-control port so the backup/restore transaction becomes testable (RW-005).
+      This gap is now explicit: the Windows service-state half of scenario 7 has no automated test.
 - [ ] Record initial architectural decisions as ADRs.
 - [ ] Validate the development environment end to end (install/uninstall via `scripts/*.ps1`).
+- [ ] Decide the CLI-wide exit-code taxonomy: clap usage errors exit 2, which collides with the
+      contract's "at least one target failed" status 2.
+- [ ] Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
+- [ ] Add macOS/Linux release legs once non-Windows artifacts are published.
 
 ## Known Issues
 
 - The amendment approver role is still undesignated (RW-009).
 - `projectBrief.md` and `productContext.md` still contain template placeholders.
-- The Windows backup/restore transaction is still untested (RW-005).
+- The Windows service-control transaction is still only partially testable: the service-state half
+  of target isolation (RW-005) is not covered by an automated test because `sc.exe` is not behind a
+  port. The file replacement, rollback and marker behaviour are covered.
 - IPC handlers have no direct test seam until a supervisor port exists (RW-006).
 - A private update target reports `no access to update source` when its credential entry is absent,
-  with a provisioning hint. Private-source access is implemented.
-- Only the runtime target reports an installed version; other targets report `not installed`
-  because no per-target version marker exists yet.
+  with a provisioning hint naming the platform store target.
+- The installed version comes from `install.json`; an installation from before the marker existed
+  still reports the running version through a transitional rule scoped to `guidance-runtime`.
 - A proxy that answers with its own authentication challenge is reported as a connectivity problem
   rather than an access problem; the transport layer does not expose the distinction.
 - The credential backends are not verified against a real store by any gate; no Secret Service
@@ -145,3 +156,29 @@ depend on input from the maintainers.
   non-zero exit into "credential absent", which would have reported a locked keychain as a missing
   credential, and FR-013's provisioning step was not implemented at all.
 - Workspace tests 91 → 109.
+
+### 2026-11-12 — Multi-target update sources (phases 5-7)
+
+- Added a dedicated `JsonDocument` (`spec_version`, RFC3339 `checked_at`, `exit_status`, `targets[]`)
+  and `--format text|json` on both check entry points. The legacy flat form reuses its historical
+  check, so `--format` never changes the legacy exit status. `--target` narrows the run itself.
+- Added `marker.rs`: `install.json` with target, semver version and RFC3339 timestamp, an
+  Absent/Unreadable/Present read state, and an atomic write. `check_one` and the legacy single-target
+  path both use the marker as the selection baseline; the transitional rule is scoped to
+  `guidance-runtime` and only fires for a genuinely absent marker.
+- Refactored `install.rs` into one transactional body: archive discovery (`bin/` then the historical
+  service directory then the root), copy-and-overwrite without deleting the install directory,
+  optional service control, a full-name backup sibling, rollback that also removes files the
+  rejected archive created, and the marker written last. The runtime target keeps its four-binary
+  file set and `GuidanceRuntime` default even when `service_name` is omitted.
+- Added `install_all` orchestration: only targets reporting an available update are installed,
+  not-installed targets are skipped, failures are recorded per target, and a failing run exits 2.
+- Added the macOS CI leg, corrected the Windows credential target in the docs and the provisioning
+  hint (`guidance:update:<entry>`), and recorded the quickstart validation split between executed
+  scenarios and those that need a live private source.
+- Reviews found and fixed: a tray fail-open that reported an all-failing run as "Up to date"; a
+  marker that was displayed but not used for the update decision (which could offer a downgrade);
+  a backup-path collision that could delete another target's installation; additive rollback;
+  a runtime-behaviour change when `service_name` was omitted; and a Windows credential hint that
+  named a store target the lookup never reads.
+- Workspace tests 109 → 160 (141 in `guidance-update`).

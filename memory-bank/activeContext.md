@@ -4,15 +4,17 @@
 
 ## Current Focus
 
-Executing Spec-Kit feature `001-multi-target-update-sources`. Phases 1-4 are implemented on
-`feature/multi-target-update-sources`: the updater fans out over a configurable target list, the
-platform suffix table covers Windows, macOS and Linux, and a private target is read with a
-credential from the platform's per-user store.
+Spec-Kit feature `001-multi-target-update-sources` is implemented through T040 on
+`feature/multi-target-update-sources`. The updater fans out over a configurable target list, reads a
+private source with a credential from the platform store, renders text or JSON, derives the installed
+version from a per-target marker, and installs each target transactionally (Windows) without
+disturbing another target.
 
 ## Current Objective
 
-Continue with User Story 3 (structured output, T023-T027). Until it lands, only the human-readable
-output exists and the tray still collapses an all-failing run to "Up to date".
+Close out feature 001: commit the work, record the independent final review and session lessons, and
+validate the completion gate honestly. The remaining repository work is the deferred items below,
+not this feature.
 
 ## Current Work
 
@@ -22,107 +24,66 @@ output exists and the tray still collapses an all-failing run to "Up to date".
 - [x] Resolve the SOLID review findings (RW-001 plus OCP/DIP/DRY) on `feature/solid-findings-fix`.
 - [x] Decide `Cargo.lock` tracking — tracked since `b9f817d` (RW-002 Handled).
 - [x] Make update asset selection architecture-aware so arm64 installations can update.
-- [x] Draft the constitution v1.0.0 in `.specify/memory/constitution.md` (scaffold resolved).
 - [x] Ratify the constitution v1.0.0 (2026-11-12); Sync Impact Report removed.
-- [x] Implement Spec-Kit feature 001 phases 1-3 (T001-T015): multi-target configuration, outcome
-      model, platform-aware suffix table, fan-out, exit statuses, CLI wiring.
-- [x] Implement phase 4 (T016-T022): CredentialStore port with Windows Credential Manager, macOS
-      Keychain and Linux Secret Service backends; authenticated GitHub adapter using the asset
-      endpoint; refusal classification; credential wiring in the check path.
-- [ ] Continue feature 001 with US3 (T023-T027) — structured output.
+- [x] Implement feature 001 phases 1-3 (T001-T015).
+- [x] Implement phase 4 (T016-T022): CredentialStore, authenticated GitHub adapter, refusal
+      classification, credential wiring.
+- [x] Implement phases 5-7 (T023-T040): structured text and JSON output, `--format`, version
+      marker, shared transactional install, per-target orchestration, macOS CI leg, docs, READMEs,
+      least privilege, quickstart validation. Workspace tests 160 (141 in `guidance-update`).
 - [ ] Complete `projectBrief.md` — blocked on owner and primary-user input.
 - [ ] Complete `productContext.md` — user journeys need product input.
 
 ## Recent Changes
 
-- `crates/update/src/credentials.rs` (new): three cfg-gated credential backends. Windows reads
-  `guidance:update:<entry>` through `CredReadW`; macOS and Linux build a `CredentialCommand` in a
-  pure function that a test inspects, and only the documented "item not found" status counts as
-  absent — every other failure is an unusable store, because the remedies differ.
-- `crates/update/src/ports.rs`: `CredentialStore` port, a redacting `Secret` newtype, and the
-  `Access` / `AuthenticatedAsset` shapes that keep a target identity and its credential together.
-- `crates/update/src/github.rs`: sends a bearer token only for a private target, fetches bytes from
-  the API asset endpoint, classifies 401/403/404 identically as an access problem, and no longer
-  puts the repository URL into any error text.
-- `crates/update/src/lib.rs`: `Asset` carries only `id` and `name`; `browser_download_url` was
-  removed so no caller can fall back to an unauthenticated address.
-- `crates/update/src/command.rs`: `token_for` resolves the credential per visibility and a public
-  target never consults the store; an absent entry reports the pinned phrase plus the entry name
-  and the provisioning step.
-- `crates/update/src/`: added `config.rs` (target list, legacy flat form, validation naming the
-  offending field, file-shape preservation on save), `report.rs` (closed seven-state outcome model,
-  `UpdateRun`, text rendering), `config_tests.rs`. `arch.rs` widened from Windows-only to a
-  platform-and-architecture suffix table without changing the Windows values. `command.rs` gained
-  `check_all` (per-target fan-out with failure isolation) and `check_update_with`. `Installer` now
-  takes `&UpdateTarget` rather than the whole configuration.
-- `crates/cli/src/main.rs`, `crates/updater/src/main.rs`: a legacy flat configuration keeps the
-  historical output wording and exit status; an explicit `[[targets]]` file gets one line per
-  target. `--target` is forwarded to the spawned updater and now scopes the exit status.
-- `crates/tray/src/main.rs`: adapted to the target-based API.
-- `config/updates.example.toml`: documents both the flat and the `[[targets]]` form.
-- `docs/IMPLEMENTATION_STATUS.md`: records what the multi-target work delivers and, explicitly,
-  what it does not yet deliver.
-- `.specify/memory/constitution.md`: replaced the untouched Spec Kit scaffold with the first
-  ratified principle set (v1.0.0): Fail-Closed Safety, Test Evidence Before Claims, Stable
-  Protocol Surface, Minimal Review-Gated Change, Platform Boundaries Are Explicit; plus
-  Technology Constraints, Development Workflow & Quality Gates, and Governance sections.
-  Ratified 2026-11-12; first version, so the whole set counts as initial adoption.
-- `crates/update/src/arch.rs`: architecture-to-suffix mapping (`x86_64` → `windows-x64.zip`,
-  `aarch64` → `windows-arm64.zip`); unknown architectures error instead of falling back to x64.
-- `crates/update/src/lib.rs`: `UpdateConfig.asset_pattern` is now `Option<String>`; an omitted key
-  derives from the running architecture, an explicitly empty value is rejected.
-- `crates/update/src/selection.rs`: asset matching is suffix-based and architecture-guarded; the
-  configured pattern can narrow the search but never widen it to another architecture.
-- `crates/protocol/src/lib.rs`: added the typed `Method` enum (`as_str`, `FromStr`, `ALL`) as the
-  single source of IPC method names, pinned by tests.
-- `crates/ipc/src/`: split into `lib.rs` (transport), `dispatch.rs` (one handler per method),
-  `error.rs` (typed `DispatchError` with exhaustive wire codes) and `params.rs`.
-- `crates/update/src/`: split into `lib.rs` (composition root + public API), `ports.rs`,
-  `github.rs`, `install.rs`, `selection.rs`, `command.rs`, `params.rs`, `tests.rs`. The update
-  pipeline now runs against the `Releases`/`Downloader`/`Installer` ports; the Windows install
-  body is unchanged.
-- `crates/cli/src/main.rs`, `crates/updater/src/main.rs`: use the shared
-  `set_or_get_channel`/`check_update` command bodies and the `Method` enum.
-- `crates/tray/src/main.rs`: uses the `Method` enum.
-- `crates/update/src/lib.rs`: adapted archive extraction to `zip` 2.6.1
-  (`enclosed_name()` returns `PathBuf`; added a missing statement terminator).
-- `crates/tray/src/main.rs`: migrated from deprecated `EventLoop::run` to
-  `ApplicationHandler::run_app`.
-- `crates/cli/src/main.rs`: fixed the `UpdateCommand::Install` binding that broke the Windows build.
-- `.guidance/`: full generated configuration, verified with `setup_guidance_verify` (23/23).
-- `.github/workflows/ci.yml`: the temporary debug steps were removed (RW-003).
+- `crates/update/src/report.rs`: dedicated `JsonDocument` (`spec_version`, RFC3339 `checked_at`,
+  `exit_status`, `targets[]`) and `render_json`/`render_json_now`; `UpdateRun` remains timestamp-free
+  and not `Serialize`. Human rendering keeps the verbatim access phrase and de-duplicates the
+  network-error detail.
+- `crates/update/src/marker.rs` (new): `install.json` with target, semver version and RFC3339
+  timestamp; read state distinguishes Absent / Unreadable / Present; atomic temp+rename write.
+- `crates/update/src/command.rs`: `installed_version` is the shared installed-version source;
+  `check_one` selects against the marker version, not the running binary; the legacy single-target
+  `check_with` also honours a marker when present. `install_all`/`InstallRun` orchestrate per-target
+  installation.
+- `crates/update/src/install.rs`: one transactional body for every target. Archive discovery is
+  `bin/`, then the historical service directory, then the root; replacement is copy-and-overwrite
+  and never deletes the install directory; the backup sibling is `"<name>.backup"` (full name, not
+  `with_extension`); rollback stops the service before restoring and removes files the rejected
+  archive created; the marker is written last.
+- `crates/update/src/config.rs`: rejects a rollback directory that collides with any target's
+  install directory; `UpdateTarget` denies unknown fields; `select_target` narrows before a run.
+- `crates/update/src/credentials.rs`: `provision_hint` renders the platform-correct provisioning
+  instruction, so the CLI hint and the lookup cannot disagree (`guidance:update:<entry>` on Windows).
+- `crates/cli/src/main.rs`, `crates/updater/src/main.rs`: `--format text|json`; `--target` narrows
+  the run; install hands off to the updater, which reports per-target results and exits 0 or 2.
+- `crates/tray/src/main.rs`: a pure `check_summary`; an all-failing run reports `Update problem`,
+  never `Up to date`.
+- `.github/workflows/ci.yml`: `macos-latest` added; `release.yml` remains Windows-only.
+- `config/updates.example.toml`, `docs/IMPLEMENTATION_STATUS.md`, `README.md`, `README.de.md`,
+  `specs/001-multi-target-update-sources/quickstart.md`: updated to describe the delivered code,
+  the least-privilege provisioning rule, and the executed/not-executed validation split.
 
 ## Recent Decisions
 
-- The ports carry target identity and credential together (`Access`, `AuthenticatedAsset`) rather
-  than as separate parameters, so a token cannot be paired with the wrong repository by accident.
-- `browser_download_url` was removed from `Asset` instead of kept unused: a field a caller could
-  reach for is the defect the change exists to prevent.
-- A refusal is `Inaccessible` and everything else is a transport failure, decided by status code
-  before any transport error is inspected. The consequence is deliberate: a typo in a public
-  repository name now reads as an access problem, which the docs state.
-- Only the documented "item not found" exit status counts as an absent credential. Treating every
-  non-zero exit that way was a fail-open bug caught in review: a locked keychain would have been
-  reported as a missing credential.
-- Access is resolved before the installed-version question, by operator decision, because a user
-  without a credential cannot obtain the product at all.
-- The update configuration is modelled as a raw `ConfigFile` (all fields optional) plus a
-  normalized `UpdateConfig`, deliberately not as a serde untagged enum: an untagged enum reports
-  "data did not match any variant", and the specification requires the offending field to be named.
-- `UpdateConfig` records the file shape it was loaded with, because a channel change must not
-  reshape a legacy flat file into the array form. An independent review caught this as an FR-003
-  violation before it reached the branch.
-- The legacy path is a separate render branch, not a special case inside per-target rendering,
-  because SC-001 requires byte-identical output for a file the operator never changed.
-- A foreign target reports `not installed` rather than borrowing the runtime's own version. That is
-  honest but means only the runtime target reports a real installed version until the per-target
-  marker lands.
-- The constitution encodes existing practice (`AGENTS.md`, CI workflows, `docs/SECURITY.md`) rather
-  than introducing new rules; each principle names the failure that motivated it.
-- Guidance configuration uses template `rust`, transport `http`, GitNexus `optional` with
-  `local-cli` index refresh, Insight downstream enabled, `gates = standard`.
-- `.guidance/scripts/*.mjs` live directly under `.guidance/scripts/`, matching the paths
-  referenced in `operations.json`.
+- The marker is authoritative and is the selection baseline. Using the running CLI version would
+  offer a downgrade to a target installed at a different version.
+- The transitional legacy rule (no marker + `guidance-service.exe` ⇒ installed at the running
+  version) applies only to `guidance-runtime` and only when the marker is genuinely absent. A
+  corrupt or mismatched marker is not an installation without a marker.
+- The legacy flat form still reuses its historical check, so `--format` and marker reading never
+  change its historical exit status; a pre-existing installation has no marker, so SC-001 holds.
+- Backup paths are derived from the full directory name; `with_extension("backup")` would make
+  `App.Prod` and `App.backup` collide and delete another target's installation.
+- Rollback must stop the service before restoring (overwriting a running executable fails) and must
+  remove paths the rejected archive created; restoring the backup alone is additive.
+- An all-failing check or install run exits 2. This defect has appeared twice in the feature and is
+  now pinned by tests in both paths.
+- A not-installed target is never installed; during `install` it is reported and skipped with 0,
+  while a `check` of the same target may report an access problem with 2. The commands answer
+  different questions and the docs state the difference.
+- Windows installation remains the only implemented install platform; macOS/Linux checking is
+  supported and the CI leg exists, but non-Windows release legs are deferred until artifacts exist.
 
 ## Open Questions
 
@@ -137,16 +98,15 @@ output exists and the tray still collapses an all-failing run to "Up to date".
 
 ## Next Actions
 
-1. Commit the ratified constitution as a constitution-only change, separately from the feature work
-   that shares this working tree (a reviewer flagged the mix against the Governance section).
-2. Continue feature 001 with US3 (T023-T027), which must not collapse the two rendering paths the
-   legacy contract depends on without re-deciding SC-001.
-3. Address the open review item: a proxy that answers with its own authentication challenge is
-   reported as a connectivity problem, because the transport layer does not expose the
-   distinction. Needs a transport-level probe, not a status-code mapping.
-4. Answer the open questions above, then fill `projectBrief.md` and `productContext.md`.
-5. Restart the Guidance server so the new `.guidance/` configuration is snapshotted.
+1. Commit the phase 5-7 work as one feature commit; write the final-review evidence after the commit.
+2. Answer the open questions above, then fill `projectBrief.md` and `productContext.md`.
+3. Decide the CLI-wide exit-code taxonomy (clap usage errors currently exit 2, colliding with
+   "at least one target failed").
+4. Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
+5. Add a service-control port so the Windows service-state half of target isolation becomes testable
+   (RW-005).
+6. Restart the Guidance server so the final `.guidance/` state is snapshotted.
 
 ## Last Updated
 
-2026-11-12 (agent session: feature 001 phase 4 implemented)
+2026-11-12 (agent session: feature 001 phases 5-7 implemented and validated)

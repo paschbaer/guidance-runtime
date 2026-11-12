@@ -70,7 +70,13 @@ pub struct TargetCheck {
     /// The configured target name.
     pub target: String,
     pub state: TargetState,
-    /// `None` exactly when `state` is [`TargetState::NotInstalled`].
+    /// The version read from the target's marker, or `None` when no installed
+    /// version is known.
+    ///
+    /// `NotInstalled` always implies `None`. The converse does not hold and must
+    /// not be assumed: an access or transport problem is resolved before the
+    /// installed-version question (see `check_one`), so a failing target may
+    /// carry `None` here without being "not installed".
     pub installed_version: Option<String>,
     /// `None` unless `state` is [`TargetState::UpdateAvailable`].
     pub offered_version: Option<String>,
@@ -186,7 +192,18 @@ pub fn render_check(check: &TargetCheck) -> String {
             line
         }
         TargetState::NetworkError => {
-            let detail = check.detail.as_deref().unwrap_or("unreachable");
+            // The adapter's own text already leads with "cannot reach update
+            // source"; repeating it would replace the informative part of the
+            // line with the same phrase twice.
+            let detail = match check.detail.as_deref() {
+                Some("cannot reach update source") => "connection failed",
+                Some(raw) => raw
+                    .strip_prefix("cannot reach update source")
+                    .map(|rest| rest.trim_start_matches([':', ' ']))
+                    .filter(|rest| !rest.is_empty())
+                    .unwrap_or(raw),
+                None => "connection timed out",
+            };
             format!("{name}  cannot reach update source (network error: {detail})")
         }
         TargetState::InvalidArtifact => {
@@ -200,6 +217,56 @@ pub fn render_check(check: &TargetCheck) -> String {
             format!("{name}  credential store unavailable on this system")
         }
     }
+}
+
+/// The structured document emitted by `--format json`.
+///
+/// This is deliberately a separate output type rather than `Serialize` on
+/// [`UpdateRun`]: the contract requires `checked_at` and `exit_status` as
+/// fields, while `UpdateRun` knows no clock and treats the exit status as a
+/// method. Deriving `Serialize` onto the run would either omit both fields or
+/// force the run to carry a timestamp it does not own.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct JsonDocument {
+    /// Schema version. Mirrors [`UpdateRun::SPEC_VERSION`].
+    pub spec_version: u32,
+    /// RFC3339 timestamp of the run.
+    pub checked_at: String,
+    /// The run's exit status, as a field so a producer and a consumer agree.
+    pub exit_status: u8,
+    /// One entry per selected target, in configuration order.
+    pub targets: Vec<TargetCheck>,
+}
+
+impl JsonDocument {
+    pub fn from_run(run: &UpdateRun, checked_at: impl Into<String>) -> Self {
+        Self {
+            spec_version: run.spec_version,
+            checked_at: checked_at.into(),
+            exit_status: run.exit_status(),
+            targets: run.targets.clone(),
+        }
+    }
+}
+
+/// Serializes a run as the structured document.
+///
+/// `checked_at` is passed in rather than read from the clock so a test can pin
+/// the whole document; callers that want the current time use
+/// [`render_json_now`].
+pub fn render_json(run: &UpdateRun, checked_at: &str) -> anyhow::Result<String> {
+    let document = JsonDocument::from_run(run, checked_at);
+    serde_json::to_string_pretty(&document).map_err(Into::into)
+}
+
+/// Serializes a run with the current UTC time as `checked_at`.
+pub fn render_json_now(run: &UpdateRun) -> anyhow::Result<String> {
+    use time::format_description::well_known::Rfc3339;
+
+    let checked_at = time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|e| anyhow::anyhow!("format checked_at: {e}"))?;
+    render_json(run, &checked_at)
 }
 
 /// Renders a whole run, one line per target, in configuration order.

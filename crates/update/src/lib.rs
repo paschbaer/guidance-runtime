@@ -18,6 +18,7 @@ mod config_tests;
 mod credentials;
 mod github;
 mod install;
+pub mod marker;
 mod params;
 mod ports;
 mod report;
@@ -29,20 +30,47 @@ pub use arch::{
     asset_suffix_for, asset_suffix_for_arch, running_arch, Platform, KNOWN_ARCH_SUFFIXES,
 };
 pub use command::{
-    check_all, check_update, check_update_with, current_version, set_or_get_channel,
-    uses_legacy_output, UpdateOutcome,
+    check_all, check_from_outcome, check_update, check_update_with, current_version, install_all,
+    set_or_get_channel, uses_legacy_output, InstallEntry, InstallRun, UpdateOutcome,
 };
 pub use config::{ConfigFile, UpdateConfig, UpdateTarget, Visibility, LEGACY_TARGET_NAME};
-pub use credentials::{command_for, CredentialCommand, PlatformCredentialStore, SERVICE};
+pub use credentials::{
+    command_for, provision_hint, CredentialCommand, PlatformCredentialStore, SERVICE,
+};
 pub use github::GitHubReleases;
+pub use github::HttpDownloader;
 pub use github::{classify_status, SourceError};
 pub use ports::{
     Access, AuthenticatedAsset, BoxFuture, CredentialStore, CredentialStoreError, Downloader,
     Installer, Releases, Secret,
 };
-pub use report::{render_check, render_run, TargetCheck, TargetState, UpdateRun};
+pub use report::{
+    render_check, render_json, render_json_now, render_run, JsonDocument, TargetCheck, TargetState,
+    UpdateRun,
+};
 
 pub use selection::{is_allowed, parse_checksum, select};
+
+/// Installs the available updates with the default HTTP downloader and archive
+/// installer. The caller selects the targets by narrowing the configuration
+/// first.
+pub async fn install_all_default(
+    source: &dyn Releases,
+    store: &dyn CredentialStore,
+    config: &UpdateConfig,
+    current: &Version,
+) -> InstallRun {
+    let downloader = github::HttpDownloader::new();
+    command::install_all(
+        source,
+        &downloader,
+        &install::ZipInstaller,
+        store,
+        config,
+        current,
+    )
+    .await
+}
 
 pub const DEFAULT_CONFIG: &str = r"C:\ProgramData\Guidance Runtime\config\updates.toml";
 
@@ -137,10 +165,17 @@ pub async fn check_with(
         .await?;
     let pattern = target.resolved_asset_pattern()?;
     let expected = arch::asset_suffix_for_arch(arch::running_arch())?;
+    // A marker is the truer installed version when one exists. A pre-existing
+    // installation has no marker, so this falls back to the running version and
+    // SC-001's behaviour is unchanged for every machine that predates the
+    // feature; a marker can only exist after this updater installed something.
+    let baseline = marker::read_version(&target.install_dir, &target.name)
+        .and_then(|version| Version::parse(&version).ok())
+        .unwrap_or_else(|| current.clone());
     Ok(selection::select(
         &target.repository,
         target.channel,
-        current,
+        &baseline,
         &pattern,
         expected,
         releases,
@@ -189,6 +224,6 @@ pub async fn download_and_verify_with(
 }
 
 /// Installs a downloaded archive with the default installer.
-pub fn install_archive(target: &UpdateTarget, bytes: &[u8]) -> Result<()> {
-    install::ZipInstaller.install(target, bytes)
+pub fn install_archive(target: &UpdateTarget, version: &Version, bytes: &[u8]) -> Result<()> {
+    install::ZipInstaller.install(target, version, bytes)
 }

@@ -25,6 +25,8 @@ repository = "YOUR-ORG/guidance-runtime"
 channel = "stable" # stable oder beta
 ```
 
+Diese flache Form bleibt ein einzelnes Ziel namens `guidance-runtime` und behält ihre historische Ausgabe. Sie bleibt auch beim Ändern des Channels flach. Für mehrere Produkte gibt es die `[[targets]]`-Form unter [Updates](#updates).
+
 ## Git-Flow und automatische Releases
 
 ```text
@@ -50,12 +52,64 @@ Die Versionslinie wird über `VERSION_MAJOR` und `VERSION_MINOR` in `.github/wor
 ## Updates
 
 ```powershell
-guidance update channel
-guidance update channel beta
-guidance update check
-guidance update install --yes
+guidance update channel [--target NAME]
+guidance update channel beta [--target NAME]
+guidance update check [--format text|json] [--target NAME]
+guidance update install [--target NAME] --yes
 ```
 
-Der Updater lädt das ZIP, das zur laufenden Architektur passt (`windows-x64` oder `windows-arm64`), zusammen mit der SHA-256-Datei, prüft das Archiv, stoppt `GuidanceRuntime`, sichert die Installation, ersetzt die Binaries und startet den Dienst neu. Schlägt Austausch oder Neustart fehl, wird das Backup wiederhergestellt. Die Architektur wird automatisch ermittelt; `asset_pattern` in `updates.toml` dient nur als Übersteuerung.
+`--target` beschränkt Check oder Installation auf ein konfiguriertes Ziel. Ohne Angabe prüft ein Check jedes Ziel, und eine Installation wendet jedes Ziel mit verfügbarem Update an. `--yes` ist für jede Installation Pflicht.
+
+### Mehrere Update-Ziele
+
+Ein einzelnes Produkt kann die flache Form oben behalten. Für mehrere Produkte mit einem Updater werden sie als `[[targets]]` deklariert (die beiden Formen nicht mischen):
+
+```toml
+[[targets]]
+name = "guidance-runtime"
+repository = "YOUR-ORG/guidance-runtime"
+visibility = "public"
+channel = "stable"
+install_dir = "C:/Program Files/Guidance Runtime"
+service_name = "GuidanceRuntime"
+
+[[targets]]
+name = "guidance"
+repository = "YOUR-ORG/guidance-dist"
+visibility = "private"
+credential_entry = "guidance-update"
+channel = "stable"
+install_dir = "C:/Program Files/Guidance"
+```
+
+Zwei Ziele dürfen kein `install_dir` teilen, und kein `install_dir` darf dem Rollback-Verzeichnis eines anderen Ziels entsprechen. Ein Ziel namens `guidance-runtime` behält den Dienst `GuidanceRuntime` auch ohne `service_name`; jedes andere Ziel ohne `service_name` wird ohne Dienststeuerung installiert.
+
+### Private Quellen und Zugangsdaten
+
+Ein privates Ziel nennt in `credential_entry` den Namen eines Eintrags im Credential-Store. Das Geheimnis selbst steht nie in der Konfiguration. Der Eintrag wird einmal pro Benutzer bereitgestellt:
+
+| Plattform | Befehl |
+|---|---|
+| Windows | Anmeldeinformationsverwaltung, generische Anmeldeinformation, Ziel `guidance:update:<entry>` |
+| macOS | `security add-generic-password -s guidance-update -a <entry> -w` |
+| Linux | `secret-tool store --label='Guidance' service guidance-update username <entry>` |
+
+Das Token darf **nur Lesezugriff auf die Release-Artefakte dieses Repositorys** haben. Es darf keinen Zugriff auf Quellcode-Repositories und keinen Schreibzugriff gewähren. Fehlt der Eintrag, meldet die Ausgabe `no access to update source` und nennt den bereitzustellenden Eintrag.
+
+### Ausgabe und Exit-Status
+
+Ein Check gibt eine Zeile pro Ziel aus, plus eine eingerückte Detailzeile, wenn der Zustand eine handlungsrelevante Ursache hat (etwa einen nicht bereitgestellten Eintrag). `--format json` gibt stattdessen ein Dokument mit `spec_version`, `checked_at`, `exit_status` und einem `targets`-Array aus; mit `--target` enthält das Array genau einen Eintrag. Die Zustände sind `update_available`, `up_to_date`, `not_installed`, `inaccessible`, `network_error`, `invalid_artifact` und `credential_store_unavailable`.
+
+Exit-Status: `0` sauber, `1` Konfigurations- oder Auswahlfehler, die der Updater selbst erkennt, `2` mindestens ein Ziel fehlgeschlagen. Ein Kommandozeilen-Nutzungsfehler (etwa ein ungültiger `--format`-Wert) endet ebenfalls mit `2`, weil clap diesen Status verwendet. Die historische flache Form behält ihre bisherige Wortwahl und Exit `1`, wenn der Quellzugriff fehlschlägt.
+
+### Installation und installierte Version
+
+Der Updater lädt das ZIP, das zu Plattform und Architektur passt, zusammen mit der SHA-256-Datei, prüft das Archiv, sichert die Installation des Ziels, ersetzt Dateien, startet den Dienst des Ziels neu, falls es einen hat, und stellt das Backup wieder her, wenn etwas fehlschlägt. Das Archiv bestimmt seinen Inhalt: Ein `bin/`-Verzeichnis beschränkt den Austausch auf dessen Inhalt, sonst wird das Archiv-Wurzelverzeichnis installiert. Kopieren überschreibt Dateien, löscht aber nie das Installationsverzeichnis.
+
+Die installierte Version steht in `install.json` im Installationsverzeichnis des Ziels. Ein fehlender, unlesbarer oder zu einem anderen Ziel gehörender Marker wird als `not installed` gemeldet. Der Marker wird erst nach einer erfolgreichen Installation geschrieben, damit eine fehlgeschlagene Installation nie die neue Version beansprucht. Eine Übergangsregel schützt Installationen aus der Zeit vor dem Marker: Nur für `guidance-runtime` gilt ein fehlender Marker zusammen mit `guidance-service.exe` im Installationsverzeichnis als installiert in der laufenden Version.
+
+`guidance update install` startet einen abgekoppelten Updater und endet mit `0`, sobald dieser läuft; das Ergebnis pro Ziel und der Exit-Status des Updaters (`0` oder `2`) entstehen in diesem Prozess, nachdem die CLI beendet ist.
+
+Die Installation ist nur unter Windows implementiert. macOS und Linux können nach Updates suchen; eine Installation dort meldet, dass sie nur unter Windows unterstützt wird. Die Release-Matrix veröffentlicht weiterhin nur Windows-Archive, bis Nicht-Windows-Artefakte veröffentlicht werden.
 
 Das Tray-Menü zeigt den aktuell konfigurierten Update-Channel und enthält **Check for updates**.

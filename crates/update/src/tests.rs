@@ -3,8 +3,8 @@
 
 use crate::{
     check_with, download_and_verify_with, is_allowed, parse_checksum, select, Access, Asset,
-    AuthenticatedAsset, Channel, CredentialStore, CredentialStoreError, Downloader, Release,
-    Releases, Secret, UpdateTarget,
+    AuthenticatedAsset, Channel, CredentialStore, CredentialStoreError, Downloader, Installer,
+    Release, Releases, Secret, UpdateTarget,
 };
 use anyhow::Result;
 use semver::Version;
@@ -125,6 +125,49 @@ impl Downloader for FixedDownloader {
             self.0.clone()
         };
         Box::pin(async move { Ok(bytes) })
+    }
+}
+
+/// Records the credential each request carried, so a test can prove the token
+/// reaches both the archive and the checksum request.
+struct RecordingDownloader {
+    archive: Vec<u8>,
+    checksum: Vec<u8>,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+}
+
+impl Downloader for RecordingDownloader {
+    fn get<'a>(&'a self, asset: &'a AuthenticatedAsset) -> crate::BoxFuture<'a, Result<Vec<u8>>> {
+        self.seen
+            .lock()
+            .expect("recording lock")
+            .push(asset.token.as_ref().map(|t| t.expose().to_string()));
+        let bytes = if asset.url.ends_with("1001") {
+            self.checksum.clone()
+        } else {
+            self.archive.clone()
+        };
+        Box::pin(async move { Ok(bytes) })
+    }
+}
+
+/// Records what was installed, or fails every install, so orchestration can be
+/// checked without touching a real install directory.
+struct RecordingInstaller {
+    installed: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    fail: bool,
+}
+
+impl Installer for RecordingInstaller {
+    fn install(&self, target: &UpdateTarget, version: &Version, _bytes: &[u8]) -> Result<()> {
+        if self.fail {
+            anyhow::bail!("simulated install failure")
+        }
+        self.installed
+            .lock()
+            .expect("installer lock")
+            .push((target.name.clone(), version.to_string()));
+        Ok(())
     }
 }
 
@@ -355,6 +398,45 @@ async fn download_refuses_an_update_without_checksum_asset() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("no SHA-256 asset"), "{err}");
+}
+
+/// The archive and the checksum must carry the same credential. Neither request
+/// falling back to an unauthenticated download is what makes a private artifact
+/// readable; removing either token must fail here.
+#[tokio::test]
+async fn an_authenticated_download_attaches_the_token_to_both_assets() {
+    let payload = b"payload";
+    let digest = crate::params::sha256_hex(payload);
+    let source = FixedReleases(vec![release(
+        "v2.0.0",
+        false,
+        &[ASSET, "windows-x64.zip.sha256"],
+    )]);
+    let update = check_with(&source, &config(Channel::Stable), None, &v("1.0.0"))
+        .await
+        .unwrap()
+        .unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let downloader = RecordingDownloader {
+        archive: payload.to_vec(),
+        checksum: digest.into_bytes(),
+        seen: seen.clone(),
+    };
+    let token = Secret::new("ghp_sentinel_download");
+
+    let bytes = download_and_verify_with(&downloader, &update, Some(&token))
+        .await
+        .unwrap();
+
+    assert_eq!(bytes, payload);
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        [
+            Some("ghp_sentinel_download".to_string()),
+            Some("ghp_sentinel_download".to_string())
+        ],
+        "both the archive and the checksum request must carry the credential"
+    );
 }
 
 #[tokio::test]
@@ -654,6 +736,22 @@ fn runtime_target_named(name: &str, visibility: Visibility) -> UpdateTarget {
     }
 }
 
+/// A target whose install directory holds a marker for `version`.
+///
+/// The returned `TempDir` must stay alive for the duration of the test: it
+/// owns the directory the marker was written into.
+fn runtime_target_with_marker(
+    name: &str,
+    visibility: Visibility,
+    version: &str,
+) -> (UpdateTarget, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut target = runtime_target_named(name, visibility);
+    target.install_dir = dir.path().to_path_buf();
+    crate::marker::write(dir.path(), name, version).unwrap();
+    (target, dir)
+}
+
 /// FR-008 / SC-002: with two targets configured, both are checked even when
 /// the first one fails, and the run reports one result per target.
 #[tokio::test]
@@ -725,7 +823,9 @@ async fn a_private_target_reports_inaccessible_with_the_verbatim_phrase() {
 #[tokio::test]
 async fn a_public_target_with_a_newer_release_reports_update_available() {
     let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
-    let cfg = cfg_of(vec![runtime_target(Visibility::Public)]);
+    let (target, _dir) =
+        runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Public, "1.0.0");
+    let cfg = cfg_of(vec![target]);
 
     let store = FixedCredentialStore(None);
     let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
@@ -740,7 +840,9 @@ async fn a_public_target_with_a_newer_release_reports_update_available() {
 #[tokio::test]
 async fn a_public_target_with_no_newer_release_is_up_to_date() {
     let source = FixedReleases(vec![release("v1.0.0", false, &[X64])]);
-    let cfg = cfg_of(vec![runtime_target(Visibility::Public)]);
+    let (target, _dir) =
+        runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Public, "1.0.0");
+    let cfg = cfg_of(vec![target]);
 
     let store = FixedCredentialStore(None);
     let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
@@ -754,10 +856,11 @@ async fn a_public_target_with_no_newer_release_is_up_to_date() {
 #[tokio::test]
 async fn a_run_with_a_mixed_outcome_exits_two() {
     let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
-    let cfg = cfg_of(vec![
-        runtime_target(Visibility::Public),
-        runtime_target_named("private-runtime", Visibility::Private),
-    ]);
+    let (public, _public_dir) =
+        runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Public, "1.0.0");
+    let (private, _private_dir) =
+        runtime_target_with_marker("private-runtime", Visibility::Private, "1.0.0");
+    let cfg = cfg_of(vec![public, private]);
 
     let store = FixedCredentialStore(None);
     let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
@@ -859,6 +962,93 @@ async fn a_legacy_flat_configuration_produces_the_historical_outcome() {
     );
 }
 
+/// SC-001 covers the exit status, not only the wording. The CLI propagates a
+/// source failure with `?`, so the library must keep returning `Err` on the
+/// legacy path; swallowing it into a state would turn the historical exit 1
+/// into a clean run.
+#[tokio::test]
+async fn a_legacy_source_failure_remains_an_error() {
+    let cfg =
+        crate::UpdateConfig::parse("repository = \"owner/repo\"\nchannel = \"stable\"\n").unwrap();
+    let only = cfg.single_target().unwrap();
+    let source = FailingFor("owner/repo", Vec::new());
+
+    let result = crate::check_update_with(&source, only, None, &v("1.0.0")).await;
+    assert!(
+        result.is_err(),
+        "a source failure on the legacy path must stay an error so the CLI exits 1"
+    );
+}
+
+/// The historical beta wording is part of the pinned legacy contract; a
+/// stable-only assertion would not catch drift on the beta branch.
+#[tokio::test]
+async fn the_historical_beta_wording_is_unchanged() {
+    let source = FixedReleases(vec![release("v1.3.0-beta.10", true, &[ASSET])]);
+    let outcome = crate::check_update_with(&source, &config(Channel::Beta), None, &v("1.1.0"))
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.message(),
+        "Update available: 1.1.0 -> 1.3.0-beta.10 (beta)"
+    );
+}
+
+/// A legacy flat configuration under `--format json` emits a one-element
+/// document: the historical check is reused, so the exit status is still 0 on
+/// success (and 1 on a source failure, which never reaches this conversion).
+#[tokio::test]
+async fn a_legacy_outcome_becomes_a_one_element_document() {
+    let source = FixedReleases(vec![release("v1.0.0", false, &[X64])]);
+    let outcome = crate::check_update_with(&source, &config(Channel::Stable), None, &v("1.0.0"))
+        .await
+        .unwrap();
+    let check = crate::check_from_outcome(&config(Channel::Stable), &outcome, &v("1.0.0"));
+    let run = crate::UpdateRun::new(vec![check]);
+
+    assert_eq!(run.targets.len(), 1);
+    assert_eq!(run.targets[0].state, TargetState::UpToDate);
+    assert_eq!(run.exit_status(), 0);
+
+    let json = crate::render_json(&run, "2026-11-12T09:14:03Z").unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["targets"].as_array().unwrap().len(), 1);
+    assert_eq!(value["exit_status"], 0);
+}
+
+/// The available branch of the same conversion carries both versions.
+#[tokio::test]
+async fn a_legacy_available_outcome_names_installed_and_offered_versions() {
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let outcome = crate::check_update_with(&source, &config(Channel::Stable), None, &v("1.0.0"))
+        .await
+        .unwrap();
+    let check = crate::check_from_outcome(&config(Channel::Stable), &outcome, &v("1.0.0"));
+
+    assert_eq!(check.state, TargetState::UpdateAvailable);
+    assert_eq!(check.installed_version.as_deref(), Some("1.0.0"));
+    assert_eq!(check.offered_version.as_deref(), Some("2.0.0"));
+}
+
+/// The network-error line must not repeat the leading phrase when the adapter's
+/// detail already starts with it; the informative part of the line is what an
+/// operator needs.
+#[test]
+fn a_network_error_line_does_not_repeat_the_leading_phrase() {
+    let check = crate::TargetCheck::new(
+        "guidance",
+        TargetState::NetworkError,
+        Some("1.0.0".into()),
+        None,
+        "stable",
+        Some("cannot reach update source".into()),
+    );
+    assert_eq!(
+        crate::render_check(&check),
+        "guidance  cannot reach update source (network error: connection failed)"
+    );
+}
+
 // --- credential port -------------------------------------------------------
 
 /// A secret must not render its value: every error path formats its context,
@@ -916,7 +1106,9 @@ fn private_runtime_target() -> UpdateTarget {
 async fn a_private_target_with_a_credential_reports_its_real_state() {
     let (source, seen) = RecordingReleases::new(vec![release("v2.0.0", false, &[X64])]);
     let store = FixedCredentialStore(Some(Secret::new("ghp_valid")));
-    let cfg = cfg_of(vec![private_runtime_target()]);
+    let (target, _dir) =
+        runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Private, "1.0.0");
+    let cfg = cfg_of(vec![target]);
 
     let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
 
@@ -935,7 +1127,9 @@ async fn a_private_target_with_a_credential_reports_its_real_state() {
 async fn a_public_target_never_consults_the_credential_store() {
     let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
     let store = NoCredentialStore;
-    let cfg = cfg_of(vec![runtime_target(Visibility::Public)]);
+    let (target, _dir) =
+        runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Public, "1.0.0");
+    let cfg = cfg_of(vec![target]);
 
     let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
 
@@ -1086,6 +1280,22 @@ async fn an_absent_credential_names_the_entry_and_the_step() {
     assert!(line.contains("provision"), "{line}");
 }
 
+/// The hint must name the store target the lookup actually reads. On Windows
+/// that is `guidance:update:<entry>`, not the macOS/Linux service name; a hint
+/// that disagrees with the lookup sends the operator to provision something the
+/// updater will never find.
+#[test]
+fn the_provisioning_hint_names_the_platform_store_target() {
+    let hint = crate::credentials::provision_hint("guidance-update");
+    assert!(hint.contains("guidance-update"), "{hint}");
+    #[cfg(windows)]
+    assert!(hint.contains("guidance:update:guidance-update"), "{hint}");
+    #[cfg(target_os = "macos")]
+    assert!(hint.contains("security add-generic-password"), "{hint}");
+    #[cfg(target_os = "linux")]
+    assert!(hint.contains("secret-tool store"), "{hint}");
+}
+
 /// `AuthenticatedAsset` holds a token, so its Debug must delegate to the
 /// redacting impl rather than render the struct field by field.
 #[test]
@@ -1129,5 +1339,801 @@ async fn a_refusal_on_an_uninstalled_target_is_reported_as_access() {
     let run = crate::check_all(&RefusingReleases, &store, &cfg, &v("1.0.0")).await;
 
     assert_eq!(run.targets[0].state, TargetState::Inaccessible);
+    assert_eq!(run.exit_status(), 2);
+}
+
+// --- structured output (US3) ----------------------------------------------
+
+fn state_check(
+    state: TargetState,
+    installed: Option<&str>,
+    offered: Option<&str>,
+    detail: Option<&str>,
+) -> crate::TargetCheck {
+    crate::TargetCheck::new(
+        "guidance",
+        state,
+        installed.map(str::to_string),
+        offered.map(str::to_string),
+        "stable",
+        detail.map(str::to_string),
+    )
+}
+
+fn all_seven_states() -> Vec<crate::TargetCheck> {
+    vec![
+        state_check(
+            TargetState::UpdateAvailable,
+            Some("1.0.0"),
+            Some("2.0.0"),
+            None,
+        ),
+        state_check(TargetState::UpToDate, Some("1.0.0"), None, None),
+        state_check(TargetState::NotInstalled, None, None, None),
+        state_check(TargetState::Inaccessible, Some("1.0.0"), None, None),
+        state_check(
+            TargetState::NetworkError,
+            Some("1.0.0"),
+            None,
+            Some("connection timed out"),
+        ),
+        state_check(
+            TargetState::InvalidArtifact,
+            Some("1.0.0"),
+            None,
+            Some("no usable artifact for this platform"),
+        ),
+        state_check(
+            TargetState::CredentialStoreUnavailable,
+            Some("1.0.0"),
+            None,
+            None,
+        ),
+    ]
+}
+
+/// SC-003: all seven outcome states must be distinguishable from the text
+/// output alone. Each line also has to name its target first.
+#[test]
+fn all_seven_states_render_distinct_text_lines() {
+    let lines: Vec<String> = all_seven_states().iter().map(crate::render_check).collect();
+
+    for line in &lines {
+        assert!(line.starts_with("guidance  "), "{line}");
+    }
+    for (i, a) in lines.iter().enumerate() {
+        for b in lines.iter().skip(i + 1) {
+            assert_ne!(a, b, "two states rendered identically: {a}");
+        }
+    }
+}
+
+/// FR-015: a connectivity problem and an invalid artifact must never borrow the
+/// access phrase. A shared phrase would collapse the four outcome families the
+/// specification requires an operator to tell apart.
+#[test]
+fn network_and_invalid_artifact_never_reuse_the_access_phrase() {
+    for state in [TargetState::NetworkError, TargetState::InvalidArtifact] {
+        let check = state_check(state, Some("1.0.0"), None, None);
+        let line = crate::render_check(&check);
+        assert!(!line.contains(crate::report::PHRASE), "{line}");
+    }
+}
+
+/// SC-005: an unauthorized identity and a non-existent repository must produce
+/// identical reports. Comparing the rendered line and the serialized target
+/// catches a divergence in either surface.
+#[test]
+fn an_unauthorized_identity_and_a_missing_source_render_identically() {
+    use crate::{classify_status, SourceError};
+    use reqwest::StatusCode;
+
+    let unauthorized = classify_status(StatusCode::UNAUTHORIZED);
+    let missing = classify_status(StatusCode::NOT_FOUND);
+    assert_eq!(unauthorized, SourceError::Inaccessible);
+    assert_eq!(missing, SourceError::Inaccessible);
+
+    // Each report is built from its own classification, so the comparison is
+    // not two copies of one string.
+    let a = state_check(
+        TargetState::Inaccessible,
+        Some("1.0.0"),
+        None,
+        Some(&unauthorized.to_string()),
+    );
+    let b = state_check(
+        TargetState::Inaccessible,
+        Some("1.0.0"),
+        None,
+        Some(&missing.to_string()),
+    );
+    assert_eq!(crate::render_check(&a), crate::render_check(&b));
+    assert_eq!(
+        serde_json::to_string(&a).unwrap(),
+        serde_json::to_string(&b).unwrap()
+    );
+    assert_eq!(unauthorized.to_string(), crate::report::PHRASE);
+    assert_eq!(missing.to_string(), crate::report::PHRASE);
+}
+
+/// T024 / SC-010: the JSON document carries the contract fields in a stable
+/// order, serializes every state as snake_case, and reports the same exit
+/// status as the run.
+#[test]
+fn the_json_document_carries_the_contract_fields_in_order() {
+    let run = crate::UpdateRun::new(all_seven_states());
+    let json = crate::render_json(&run, "2026-11-12T09:14:03Z").unwrap();
+
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["spec_version"], 1);
+    assert_eq!(value["checked_at"], "2026-11-12T09:14:03Z");
+    assert_eq!(value["exit_status"], 2);
+    assert_eq!(value["targets"].as_array().unwrap().len(), 7);
+
+    let states: Vec<&str> = value["targets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["state"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        states,
+        [
+            "update_available",
+            "up_to_date",
+            "not_installed",
+            "inaccessible",
+            "network_error",
+            "invalid_artifact",
+            "credential_store_unavailable",
+        ]
+    );
+
+    // Field order is part of the contract (stable document shape).
+    let at = |key: &str| json.find(&format!("\"{key}\"")).unwrap();
+    assert!(at("spec_version") < at("checked_at"));
+    assert!(at("checked_at") < at("exit_status"));
+    assert!(at("exit_status") < at("targets"));
+}
+
+/// `render_json_now` is the production entry point. Its timestamp must be a
+/// real RFC3339 value, not a placeholder, and it must not panic on the normal
+/// clock path.
+#[test]
+fn the_clock_based_document_carries_a_parseable_rfc3339_timestamp() {
+    use time::format_description::well_known::Rfc3339;
+    use time::OffsetDateTime;
+
+    let run = crate::UpdateRun::new(vec![state_check(
+        TargetState::UpToDate,
+        Some("1.0.0"),
+        None,
+        None,
+    )]);
+    let json = crate::render_json_now(&run).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let checked_at = value["checked_at"].as_str().unwrap();
+    OffsetDateTime::parse(checked_at, &Rfc3339).expect("checked_at must be RFC3339");
+    assert_eq!(value["exit_status"], 0);
+}
+
+/// T026 / NFR-4 / SC-007: a credential value must not appear in any rendering
+/// path. The token reaches the source adapter (proving this is not a vacuous
+/// run), yet text, JSON, Debug and Display output contain no trace of it.
+#[tokio::test]
+async fn no_rendering_path_contains_the_credential_value() {
+    const SENTINEL: &str = "ghp_sentinel_do_not_render";
+
+    let (source, seen) = RecordingReleases::new(vec![release("v2.0.0", false, &[X64])]);
+    let store = FixedCredentialStore(Some(Secret::new(SENTINEL)));
+    let cfg = cfg_of(vec![private_runtime_target()]);
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
+
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        [Some(SENTINEL.to_string())],
+        "the credential must reach the adapter, so the scan below is meaningful"
+    );
+
+    let line = crate::render_check(&run.targets[0]);
+    let text = crate::render_run(&run);
+    let json = crate::render_json(&run, "2026-11-12T09:14:03Z").unwrap();
+    let asset = AuthenticatedAsset {
+        url: "https://api.github.com/repos/a/b/releases/assets/1".into(),
+        token: Some(Secret::new(SENTINEL)),
+    };
+    let secret = Secret::new(SENTINEL);
+    let surfaces = [
+        line,
+        text,
+        json,
+        format!("{asset:?}"),
+        format!("{secret:?}"),
+        format!("{secret}"),
+    ];
+    for surface in surfaces {
+        assert!(!surface.contains(SENTINEL), "credential leaked: {surface}");
+    }
+
+    // The failure path is rendered too: an inaccessible target's detail must
+    // not acquire the token even though the credential was read.
+    let failing = crate::check_all(&RefusingReleases, &store, &cfg, &v("1.0.0")).await;
+    let failing_json = crate::render_json(&failing, "2026-11-12T09:14:03Z").unwrap();
+    assert!(!failing_json.contains(SENTINEL), "{failing_json}");
+}
+
+// --- version marker (US4) --------------------------------------------------
+
+#[test]
+fn a_marker_round_trips_with_an_rfc3339_timestamp() {
+    use time::format_description::well_known::Rfc3339;
+
+    let dir = tempfile::tempdir().unwrap();
+    crate::marker::write(dir.path(), "guidance-runtime", "1.2.3").unwrap();
+
+    let marker = crate::marker::read(dir.path()).expect("marker must be readable");
+    assert_eq!(marker.target, "guidance-runtime");
+    assert_eq!(marker.version, "1.2.3");
+    time::OffsetDateTime::parse(&marker.installed_at, &Rfc3339)
+        .expect("installed_at must be RFC3339");
+    assert_eq!(
+        crate::marker::read_version(dir.path(), "guidance-runtime").as_deref(),
+        Some("1.2.3")
+    );
+}
+
+/// FR-009b: a missing or unreadable marker is "not installed", never an error
+/// that would be misread as up to date.
+#[test]
+fn an_absent_or_unreadable_marker_yields_no_version() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(
+        crate::marker::read_version(dir.path(), "guidance-runtime"),
+        None
+    );
+
+    std::fs::write(crate::marker::marker_path(dir.path()), b"not json").unwrap();
+    assert_eq!(
+        crate::marker::read_version(dir.path(), "guidance-runtime"),
+        None
+    );
+}
+
+/// FR-009c: the target name is part of the marker, so two installations cannot
+/// read each other's version.
+#[test]
+fn a_marker_for_another_target_yields_no_version() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::marker::write(dir.path(), "guidance", "2.0.0").unwrap();
+
+    assert_eq!(
+        crate::marker::read_version(dir.path(), "guidance-runtime"),
+        None
+    );
+    assert_eq!(
+        crate::marker::read_version(dir.path(), "guidance").as_deref(),
+        Some("2.0.0")
+    );
+}
+
+/// A foreign target with a valid marker reports the marker's version; this is
+/// what replaces the old name heuristic.
+#[tokio::test]
+async fn a_marker_is_the_installed_version_for_a_foreign_target() {
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let (target, _dir) = runtime_target_with_marker("guidance", Visibility::Public, "1.0.0");
+    let run = crate::check_all(
+        &source,
+        &FixedCredentialStore(None),
+        &cfg_of(vec![target]),
+        &v("0.9.0"),
+    )
+    .await;
+
+    assert_eq!(run.targets[0].installed_version.as_deref(), Some("1.0.0"));
+    assert_eq!(run.targets[0].state, TargetState::UpdateAvailable);
+}
+
+#[tokio::test]
+async fn a_target_without_a_marker_is_not_installed() {
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let run = crate::check_all(
+        &source,
+        &FixedCredentialStore(None),
+        &cfg_of(vec![target("guidance", Visibility::Public)]),
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert_eq!(run.targets[0].state, TargetState::NotInstalled);
+}
+
+fn write_legacy_runtime_executable(dir: &std::path::Path) {
+    let name = if cfg!(windows) {
+        "guidance-service.exe"
+    } else {
+        "guidance-service"
+    };
+    std::fs::write(dir.join(name), b"stub").unwrap();
+}
+
+/// Transitional rule: an existing runtime installation predates the marker and
+/// must keep reporting the running version. The test is the removal trigger's
+/// pin: when the rule is deleted, this test and
+/// `marker::legacy_runtime_present` go with it.
+#[tokio::test]
+async fn an_unmarked_runtime_installation_still_reports_the_running_version() {
+    let dir = tempfile::tempdir().unwrap();
+    write_legacy_runtime_executable(dir.path());
+    let mut target = runtime_target(Visibility::Public);
+    target.install_dir = dir.path().to_path_buf();
+
+    assert_eq!(
+        crate::marker::read_version(&target.install_dir, &target.name),
+        None,
+        "the fixture must have no marker"
+    );
+
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let run = crate::check_all(
+        &source,
+        &FixedCredentialStore(None),
+        &cfg_of(vec![target]),
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert_eq!(run.targets[0].installed_version.as_deref(), Some("1.0.0"));
+    assert_eq!(run.targets[0].state, TargetState::UpdateAvailable);
+}
+
+/// The transitional rule is scoped to the runtime target. A foreign product's
+/// executable says nothing about which version this binary knows.
+#[tokio::test]
+async fn the_transitional_rule_does_not_apply_to_a_foreign_target() {
+    let dir = tempfile::tempdir().unwrap();
+    write_legacy_runtime_executable(dir.path());
+    let mut target = runtime_target_named("guidance", Visibility::Public);
+    target.install_dir = dir.path().to_path_buf();
+
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let run = crate::check_all(
+        &source,
+        &FixedCredentialStore(None),
+        &cfg_of(vec![target]),
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert_eq!(run.targets[0].installed_version, None);
+    assert_eq!(run.targets[0].state, TargetState::NotInstalled);
+}
+
+/// The repeat defect in this feature: a run where every target failed must not
+/// exit 0. Re-asserted after the marker change to `check_one`.
+#[tokio::test]
+async fn an_all_failing_run_exits_two() {
+    let (a, _da) =
+        runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Private, "1.0.0");
+    let (b, _db) = runtime_target_with_marker("second", Visibility::Private, "1.0.0");
+    let mut b = b;
+    b.repository = "broken/repo".into();
+    let source = RefusingReleases;
+    let cfg = cfg_of(vec![a, b]);
+
+    let run = crate::check_all(&source, &FixedCredentialStore(None), &cfg, &v("1.0.0")).await;
+
+    assert!(
+        run.targets.iter().all(|t| t.state.is_failure()),
+        "fixture must make every target fail: {:?}",
+        run.targets
+    );
+    assert_eq!(run.exit_status(), 2);
+    let json = crate::render_json(&run, "2026-11-12T09:14:03Z").unwrap();
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(value["exit_status"], 2);
+}
+
+/// The installed version, not the running CLI version, decides whether a
+/// release is newer. Without this, a target installed at 2.0.0 was offered a
+/// "downgrade" to 1.5.0 because the running binary was 1.0.0.
+#[tokio::test]
+async fn the_marker_version_decides_availability_not_the_running_version() {
+    // Installed 2.0.0, newest release 1.5.0, running 1.0.0: not an update.
+    let (target, _dir) = runtime_target_with_marker("guidance", Visibility::Public, "2.0.0");
+    let source = FixedReleases(vec![release("v1.5.0", false, &[X64])]);
+    let run = crate::check_all(
+        &source,
+        &FixedCredentialStore(None),
+        &cfg_of(vec![target]),
+        &v("1.0.0"),
+    )
+    .await;
+    assert_eq!(run.targets[0].state, TargetState::UpToDate);
+    assert_eq!(run.targets[0].installed_version.as_deref(), Some("2.0.0"));
+
+    // Installed 1.0.0, newest release 2.0.0, running 5.0.0: is an update.
+    let (target, _dir) = runtime_target_with_marker("guidance", Visibility::Public, "1.0.0");
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let run = crate::check_all(
+        &source,
+        &FixedCredentialStore(None),
+        &cfg_of(vec![target]),
+        &v("5.0.0"),
+    )
+    .await;
+    assert_eq!(run.targets[0].state, TargetState::UpdateAvailable);
+    assert_eq!(run.targets[0].offered_version.as_deref(), Some("2.0.0"));
+
+    // Installed exactly the newest release: not an update.
+    let (target, _dir) = runtime_target_with_marker("guidance", Visibility::Public, "3.0.0");
+    let source = FixedReleases(vec![release("v3.0.0", false, &[X64])]);
+    let run = crate::check_all(
+        &source,
+        &FixedCredentialStore(None),
+        &cfg_of(vec![target]),
+        &v("1.0.0"),
+    )
+    .await;
+    assert_eq!(run.targets[0].state, TargetState::UpToDate);
+}
+
+/// A marker that exists but cannot be trusted must not trigger the legacy
+/// fallback, even on the runtime target with its service executable present.
+#[tokio::test]
+async fn an_unreadable_marker_on_the_runtime_target_is_not_installed() {
+    let dir = tempfile::tempdir().unwrap();
+    write_legacy_runtime_executable(dir.path());
+    std::fs::write(crate::marker::marker_path(dir.path()), b"{ broken").unwrap();
+    let mut target = runtime_target(Visibility::Public);
+    target.install_dir = dir.path().to_path_buf();
+
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let run = crate::check_all(
+        &source,
+        &FixedCredentialStore(None),
+        &cfg_of(vec![target]),
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert_eq!(run.targets[0].installed_version, None);
+    assert_eq!(run.targets[0].state, TargetState::NotInstalled);
+}
+
+/// Same for a marker that belongs to another target: it is not an installation
+/// without a marker.
+#[tokio::test]
+async fn a_mismatched_marker_on_the_runtime_target_is_not_installed() {
+    let dir = tempfile::tempdir().unwrap();
+    write_legacy_runtime_executable(dir.path());
+    crate::marker::write(dir.path(), "some-other-product", "1.2.3").unwrap();
+    let mut target = runtime_target(Visibility::Public);
+    target.install_dir = dir.path().to_path_buf();
+
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let run = crate::check_all(
+        &source,
+        &FixedCredentialStore(None),
+        &cfg_of(vec![target]),
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert_eq!(run.targets[0].installed_version, None);
+    assert_eq!(run.targets[0].state, TargetState::NotInstalled);
+}
+
+/// Only the service executable marks a legacy installation. A directory left
+/// with a stale tray or updater binary is not the runtime.
+#[tokio::test]
+async fn a_stale_non_service_binary_does_not_mark_a_legacy_installation() {
+    let dir = tempfile::tempdir().unwrap();
+    let stale = if cfg!(windows) {
+        "guidance-updater.exe"
+    } else {
+        "guidance-updater"
+    };
+    std::fs::write(dir.path().join(stale), b"stub").unwrap();
+    let mut target = runtime_target(Visibility::Public);
+    target.install_dir = dir.path().to_path_buf();
+
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let run = crate::check_all(
+        &source,
+        &FixedCredentialStore(None),
+        &cfg_of(vec![target]),
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert_eq!(run.targets[0].state, TargetState::NotInstalled);
+}
+
+#[test]
+fn a_blank_or_non_semver_marker_version_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    for version in ["", "   ", "banana"] {
+        std::fs::write(
+            crate::marker::marker_path(dir.path()),
+            serde_json::json!({
+                "target": "guidance",
+                "version": version,
+                "installed_at": "2026-11-12T09:14:03Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::marker::read_version(dir.path(), "guidance"),
+            None,
+            "version {version:?} must be rejected"
+        );
+    }
+}
+
+/// The format was chosen so a future field does not require a migration; an
+/// unknown field must therefore not make an existing marker unreadable.
+#[test]
+fn a_marker_with_an_extra_field_is_still_readable() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        crate::marker::marker_path(dir.path()),
+        serde_json::json!({
+            "target": "guidance",
+            "version": "1.2.3",
+            "installed_at": "2026-11-12T09:14:03Z",
+            "future_field": "ignored"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        crate::marker::read_version(dir.path(), "guidance").as_deref(),
+        Some("1.2.3")
+    );
+}
+
+/// SC-001 stays intact because a pre-existing install has no marker; when a
+/// marker does exist, the historical single-target path must not compare
+/// against a different running version either.
+#[tokio::test]
+async fn a_legacy_check_uses_the_marker_when_one_exists() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::marker::write(dir.path(), crate::LEGACY_TARGET_NAME, "2.0.0").unwrap();
+    let mut target = config(Channel::Stable);
+    target.install_dir = dir.path().to_path_buf();
+    let source = FixedReleases(vec![release("v1.5.0", false, &[X64])]);
+    let outcome = crate::check_update_with(&source, &target, None, &v("1.0.0"))
+        .await
+        .unwrap();
+    assert_eq!(outcome.message(), "No update available on stable channel");
+
+    let dir = tempfile::tempdir().unwrap();
+    crate::marker::write(dir.path(), crate::LEGACY_TARGET_NAME, "1.0.0").unwrap();
+    let mut target = config(Channel::Stable);
+    target.install_dir = dir.path().to_path_buf();
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let outcome = crate::check_update_with(&source, &target, None, &v("5.0.0"))
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.message(),
+        "Update available: 1.0.0 -> 2.0.0 (stable)"
+    );
+}
+
+#[test]
+fn the_marker_writer_rejects_a_non_semver_version() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(crate::marker::write(dir.path(), "guidance", "banana").is_err());
+    assert_eq!(crate::marker::read_version(dir.path(), "guidance"), None);
+}
+
+// --- install orchestration (US4) -------------------------------------------
+
+fn update_source() -> FixedReleases {
+    FixedReleases(vec![release(
+        "v2.0.0",
+        false,
+        &[ASSET, "windows-x64.zip.sha256"],
+    )])
+}
+
+fn matching_downloader(payload: &[u8]) -> FixedDownloader {
+    FixedDownloader(
+        payload.to_vec(),
+        crate::params::sha256_hex(payload).into_bytes(),
+    )
+}
+
+/// FR-020: an install run touches only targets that report an available
+/// update. An up-to-date target is reported and skipped.
+#[tokio::test]
+async fn install_all_installs_only_update_available_targets() {
+    let (a, _da) = runtime_target_with_marker("a", Visibility::Public, "1.0.0");
+    let (b, _db) = runtime_target_with_marker("b", Visibility::Public, "2.0.0");
+    let cfg = cfg_of(vec![a, b]);
+    let payload = b"payload";
+    let installed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let installer = RecordingInstaller {
+        installed: installed.clone(),
+        fail: false,
+    };
+
+    let run = crate::install_all(
+        &update_source(),
+        &matching_downloader(payload),
+        &installer,
+        &NoCredentialStore,
+        &cfg,
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert_eq!(
+        installed.lock().unwrap().as_slice(),
+        [("a".to_string(), "2.0.0".to_string())],
+        "only the update-available target may be installed"
+    );
+    assert!(matches!(
+        run.entries[0],
+        crate::InstallEntry::Installed { .. }
+    ));
+    assert!(matches!(
+        run.entries[1],
+        crate::InstallEntry::UpToDate { .. }
+    ));
+    assert_eq!(run.exit_status(), 0);
+}
+
+/// A target with no local installation is not installed speculatively.
+#[tokio::test]
+async fn install_all_skips_a_not_installed_target() {
+    let cfg = cfg_of(vec![target("guidance", Visibility::Public)]);
+    let installed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let installer = RecordingInstaller {
+        installed: installed.clone(),
+        fail: false,
+    };
+
+    let run = crate::install_all(
+        &update_source(),
+        &matching_downloader(b"payload"),
+        &installer,
+        &NoCredentialStore,
+        &cfg,
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert!(installed.lock().unwrap().is_empty());
+    assert!(matches!(
+        run.entries[0],
+        crate::InstallEntry::NotInstalled { .. }
+    ));
+    assert_eq!(run.exit_status(), 0);
+}
+
+/// An install failure is reported and never counted as success; a run where
+/// every target failed exits 2.
+#[tokio::test]
+async fn an_install_failure_is_reported_and_exits_two() {
+    let (a, _da) = runtime_target_with_marker("a", Visibility::Public, "1.0.0");
+    let (b, _db) = runtime_target_with_marker("b", Visibility::Public, "1.0.0");
+    let cfg = cfg_of(vec![a, b]);
+    let installer = RecordingInstaller {
+        installed: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        fail: true,
+    };
+
+    let run = crate::install_all(
+        &update_source(),
+        &matching_downloader(b"payload"),
+        &installer,
+        &NoCredentialStore,
+        &cfg,
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert!(run
+        .entries
+        .iter()
+        .all(|e| matches!(e, crate::InstallEntry::Failed { .. })));
+    assert_eq!(run.exit_status(), 2);
+}
+
+/// `--target` is implemented by narrowing the configuration, so only the
+/// selected target reaches the orchestration.
+#[tokio::test]
+async fn install_all_over_a_narrowed_configuration_touches_one_target() {
+    let (a, _da) = runtime_target_with_marker("a", Visibility::Public, "1.0.0");
+    let (b, _db) = runtime_target_with_marker("b", Visibility::Public, "1.0.0");
+    let cfg = cfg_of(vec![a, b]).select_target("b").unwrap();
+    let installed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let installer = RecordingInstaller {
+        installed: installed.clone(),
+        fail: false,
+    };
+
+    let run = crate::install_all(
+        &update_source(),
+        &matching_downloader(b"payload"),
+        &installer,
+        &NoCredentialStore,
+        &cfg,
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert_eq!(run.entries.len(), 1);
+    assert_eq!(
+        installed.lock().unwrap().as_slice(),
+        [("b".to_string(), "2.0.0".to_string())]
+    );
+}
+
+/// FR-019 / T032: a checksum mismatch aborts before installation, leaving the
+/// install directory and its marker untouched.
+#[tokio::test]
+async fn a_checksum_mismatch_leaves_the_install_dir_and_marker_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let install_dir = dir.path().join("install");
+    std::fs::create_dir_all(&install_dir).unwrap();
+    std::fs::write(install_dir.join("guidance.exe"), b"installed").unwrap();
+    crate::marker::write(&install_dir, "guidance", "1.0.0").unwrap();
+
+    let mut target = runtime_target_named("guidance", Visibility::Public);
+    target.install_dir = install_dir.clone();
+    let source = update_source();
+    let update = check_with(&source, &target, None, &v("1.0.0"))
+        .await
+        .unwrap()
+        .unwrap();
+
+    let downloader = FixedDownloader(b"payload".to_vec(), "0".repeat(64).into_bytes());
+    let err = download_and_verify_with(&downloader, &update, None)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("SHA-256 mismatch"), "{err}");
+
+    assert_eq!(
+        std::fs::read(install_dir.join("guidance.exe")).unwrap(),
+        b"installed"
+    );
+    assert_eq!(
+        crate::marker::read_version(&install_dir, "guidance").as_deref(),
+        Some("1.0.0")
+    );
+}
+
+/// The orchestration path must not call the installer when verification fails;
+/// a download/checksum failure is a target failure and exits 2.
+#[tokio::test]
+async fn install_all_does_not_install_when_the_checksum_fails() {
+    let (target, _dir) = runtime_target_with_marker("a", Visibility::Public, "1.0.0");
+    let cfg = cfg_of(vec![target]);
+    let installed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let installer = RecordingInstaller {
+        installed: installed.clone(),
+        fail: false,
+    };
+    let downloader = FixedDownloader(b"payload".to_vec(), "0".repeat(64).into_bytes());
+
+    let run = crate::install_all(
+        &update_source(),
+        &downloader,
+        &installer,
+        &NoCredentialStore,
+        &cfg,
+        &v("1.0.0"),
+    )
+    .await;
+
+    assert!(installed.lock().unwrap().is_empty());
+    assert!(matches!(run.entries[0], crate::InstallEntry::Failed { .. }));
+    assert!(run.entries[0].render().contains("SHA-256 mismatch"));
     assert_eq!(run.exit_status(), 2);
 }

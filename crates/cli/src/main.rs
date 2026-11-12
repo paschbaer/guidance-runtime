@@ -9,6 +9,16 @@ use std::path::PathBuf;
 #[cfg(windows)]
 use std::process::Command as OsCommand;
 
+/// How `update check` renders its result. The default keeps the historical
+/// human-readable output, so an operator gets the pre-feature behaviour unless
+/// they explicitly ask for JSON (SC-001).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+enum Format {
+    #[default]
+    Text,
+    Json,
+}
+
 #[derive(Parser)]
 struct Cli {
     #[command(subcommand)]
@@ -50,6 +60,9 @@ enum UpdateCommand {
         /// Check only this target. Omitted means every configured target.
         #[arg(long)]
         target: Option<String>,
+        /// Output format: human-readable text (default) or one JSON document.
+        #[arg(long, value_enum, default_value_t = Format::Text)]
+        format: Format,
     },
     Install {
         #[arg(long,default_value=guidance_update::DEFAULT_CONFIG)]
@@ -122,8 +135,19 @@ async fn update(command: UpdateCommand) -> Result<()> {
             }
             println!("{message}")
         }
-        UpdateCommand::Check { config, target } => {
-            let cfg = UpdateConfig::load(&config)?;
+        UpdateCommand::Check {
+            config,
+            target,
+            format,
+        } => {
+            let loaded = UpdateConfig::load(&config)?;
+            // `--target` narrows the run itself, not just the printing: a
+            // check must not read the sources (or consult the credential
+            // stores) of targets the operator explicitly excluded.
+            let cfg = match target.as_deref() {
+                Some(name) => loaded.select_target(name)?,
+                None => loaded,
+            };
             let current = guidance_update::current_version()?;
             let source = guidance_update::GitHubReleases::new();
             let store = guidance_update::PlatformCredentialStore::new();
@@ -136,29 +160,26 @@ async fn update(command: UpdateCommand) -> Result<()> {
                 // `?` here is deliberate: the historical contract reported a
                 // source failure as an error with exit status 1, and an
                 // operator's existing script may depend on that distinction.
+                // JSON changes the rendering only, never this exit status.
                 let outcome =
                     guidance_update::check_update_with(&source, only, None, &current).await?;
-                println!("{}", outcome.message());
+                match format {
+                    Format::Text => println!("{}", outcome.message()),
+                    Format::Json => {
+                        let run = guidance_update::UpdateRun::new(vec![
+                            guidance_update::check_from_outcome(only, &outcome, &current),
+                        ]);
+                        println!("{}", guidance_update::render_json_now(&run)?);
+                    }
+                }
                 return Ok(());
             }
 
             let run = guidance_update::check_all(&source, &store, &cfg, &current).await;
-            if let Some(name) = target {
-                match run.targets.iter().find(|t| t.target == name) {
-                    Some(check) => println!("{}", guidance_update::render_check(check)),
-                    None => bail!("target '{name}' is not configured"),
-                }
-                // Report the status of the target that was asked for, not of
-                // targets this run was told to ignore.
-                let status = run
-                    .targets
-                    .iter()
-                    .find(|t| t.target == name)
-                    .map(|t| t.state.is_failure())
-                    .unwrap_or(false);
-                std::process::exit(if status { 2 } else { 0 });
+            match format {
+                Format::Text => print!("{}", guidance_update::render_run(&run)),
+                Format::Json => println!("{}", guidance_update::render_json_now(&run)?),
             }
-            print!("{}", guidance_update::render_run(&run));
             std::process::exit(run.exit_status() as i32);
         }
         UpdateCommand::Install {
