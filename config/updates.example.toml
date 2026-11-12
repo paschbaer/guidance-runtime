@@ -1,0 +1,6 @@
+# GitHub owner/repository containing Guidance Runtime releases.
+repository = "YOUR-ORG/guidance-runtime"
+channel = "stable"
+install_dir = "C:/Program Files/Guidance Runtime"
+service_name = "GuidanceRuntime"
+asset_pattern = "windows-x64.zip"

@@ -1,0 +1,19 @@
+log_dir="C:/ProgramData/Guidance Runtime/logs"
+[[workloads]]
+id="guidance-mcp"
+command="C:/Program Files/Guidance MCP/guidance-mcp-server.exe"
+args=["serve","--port","43120"]
+enabled=true
+endpoint="http://127.0.0.1:43120/mcp"
+[workloads.restart]
+policy="on_failure"
+max_attempts=5
+delay_seconds=10
+[[workloads]]
+id="insight-mcp"
+command="C:/Program Files/Insight/insight-mcp.exe"
+enabled=false
+[[workloads]]
+id="clearthought-mcp"
+command="C:/Program Files/ClearThought/clearthought-mcp.exe"
+enabled=false
