@@ -107,6 +107,16 @@ For every tracked follow-up, include:
 - **Origin:** Session 2026-11-12 (independent review of the arch-aware selection).
 - **Status:** Open
 
+### RW-009 — Amendment approver role is undesignated
+
+- **Finding:** Constitution v1.0.0 was ratified on 2026-11-12, but the repository still names
+  neither a project owner nor the role that approves amendments to the constitution.
+- **Trigger point:** The first proposed amendment to `.specify/memory/constitution.md`.
+- **Action:** Required — designate the amendment approver (and the project owner for
+  `memory-bank/projectBrief.md`) and record both in the Governance section.
+- **Origin:** Session 2026-11-12 (`speckit-constitution`, constitution v1.0.0).
+- **Status:** Open
+
 ## Handled Follow-Ups
 
 ### RW-003 — Temporary debug steps in CI
