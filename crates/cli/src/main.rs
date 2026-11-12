@@ -126,6 +126,7 @@ async fn update(command: UpdateCommand) -> Result<()> {
             let cfg = UpdateConfig::load(&config)?;
             let current = guidance_update::current_version()?;
             let source = guidance_update::GitHubReleases::new();
+            let store = guidance_update::PlatformCredentialStore::new();
 
             // A file in the historical flat form keeps the historical output
             // contract: same wording, same single-target shape (SC-001). Only
@@ -135,12 +136,13 @@ async fn update(command: UpdateCommand) -> Result<()> {
                 // `?` here is deliberate: the historical contract reported a
                 // source failure as an error with exit status 1, and an
                 // operator's existing script may depend on that distinction.
-                let outcome = guidance_update::check_update_with(&source, only, &current).await?;
+                let outcome =
+                    guidance_update::check_update_with(&source, only, None, &current).await?;
                 println!("{}", outcome.message());
                 return Ok(());
             }
 
-            let run = guidance_update::check_all(&source, &cfg, &current).await;
+            let run = guidance_update::check_all(&source, &store, &cfg, &current).await;
             if let Some(name) = target {
                 match run.targets.iter().find(|t| t.target == name) {
                     Some(check) => println!("{}", guidance_update::render_check(check)),

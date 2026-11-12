@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use guidance_update::{Channel, UpdateConfig};
+use guidance_update::{Channel, CredentialStore, UpdateConfig};
 use semver::Version;
 use std::{path::PathBuf, time::Duration};
 #[derive(Parser)]
@@ -50,15 +50,16 @@ async fn main() -> Result<()> {
                 None => guidance_update::current_version()?,
             };
             let source = guidance_update::GitHubReleases::new();
+            let store = guidance_update::PlatformCredentialStore::new();
 
             if guidance_update::uses_legacy_output(&cfg, None) {
                 let only = cfg.single_target()?;
-                let outcome = guidance_update::check_update_with(&source, only, &v).await?;
+                let outcome = guidance_update::check_update_with(&source, only, None, &v).await?;
                 println!("{}", outcome.message());
                 return Ok(());
             }
 
-            let run = guidance_update::check_all(&source, &cfg, &v).await;
+            let run = guidance_update::check_all(&source, &store, &cfg, &v).await;
             print!("{}", guidance_update::render_run(&run));
             std::process::exit(run.exit_status() as i32);
         }
@@ -86,11 +87,33 @@ async fn main() -> Result<()> {
                     .with_context(|| format!("target '{name}' is not configured"))?,
                 None => cfg.single_target()?,
             };
-            let u = guidance_update::check(resolved, &v)
+            let store = guidance_update::PlatformCredentialStore::new();
+            // Resolve the credential before touching the source: a private
+            // target cannot be read without one, and a public target must not
+            // consult the store at all.
+            let token = match resolved.visibility {
+                guidance_update::Visibility::Public => None,
+                guidance_update::Visibility::Private => {
+                    let entry = resolved
+                        .credential_entry
+                        .as_deref()
+                        .context("target is private but names no credential_entry")?;
+                    Some(
+                        store
+                            .get(entry)
+                            .await
+                            .map_err(|e| anyhow::anyhow!(e))?
+                            .with_context(|| {
+                                format!("no credential provisioned for entry '{entry}'")
+                            })?,
+                    )
+                }
+            };
+            let u = guidance_update::check(resolved, token.as_ref(), &v)
                 .await?
                 .context("no update available")?;
             println!("Downloading {}", u.asset_name);
-            let b = guidance_update::download_and_verify(&u).await?;
+            let b = guidance_update::download_and_verify(&u, token.as_ref()).await?;
             guidance_update::install_archive(resolved, &b)?;
             println!("Installed {} {}", resolved.name, u.version)
         }

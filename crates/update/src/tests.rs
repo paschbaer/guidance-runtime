@@ -2,16 +2,61 @@
 //! ports (no network, no filesystem outside temp dirs).
 
 use crate::{
-    check_with, download_and_verify_with, is_allowed, parse_checksum, select, Asset, Channel,
-    Downloader, Release, Releases, UpdateTarget,
+    check_with, download_and_verify_with, is_allowed, parse_checksum, select, Access, Asset,
+    AuthenticatedAsset, Channel, CredentialStore, CredentialStoreError, Downloader, Release,
+    Releases, Secret, UpdateTarget,
 };
 use anyhow::Result;
 use semver::Version;
 
+/// Returns a fixed secret, so a private-target path can be exercised without a
+/// real credential store.
+struct FixedCredentialStore(Option<Secret>);
+
+impl CredentialStore for FixedCredentialStore {
+    fn get<'a>(
+        &'a self,
+        _entry: &'a str,
+    ) -> crate::BoxFuture<'a, std::result::Result<Option<Secret>, CredentialStoreError>> {
+        let value = self.0.clone();
+        Box::pin(async move { Ok(value) })
+    }
+}
+
+/// Panics if consulted, proving that a path which must not read credentials
+/// really does not.
+struct NoCredentialStore;
+
+impl CredentialStore for NoCredentialStore {
+    fn get<'a>(
+        &'a self,
+        _entry: &'a str,
+    ) -> crate::BoxFuture<'a, std::result::Result<Option<Secret>, CredentialStoreError>> {
+        Box::pin(async move { panic!("this path must not consult the credential store") })
+    }
+}
+
+/// Reports the store as unusable, which must be distinguishable from an absent
+/// entry.
+struct UnavailableCredentialStore;
+
+impl CredentialStore for UnavailableCredentialStore {
+    fn get<'a>(
+        &'a self,
+        _entry: &'a str,
+    ) -> crate::BoxFuture<'a, std::result::Result<Option<Secret>, CredentialStoreError>> {
+        Box::pin(async move {
+            Err(CredentialStoreError::Unavailable(
+                "no secret service on this system".into(),
+            ))
+        })
+    }
+}
+
 struct FixedReleases(Vec<Release>);
 
 impl Releases for FixedReleases {
-    fn list<'a>(&'a self, _repository: &'a str) -> crate::BoxFuture<'a, Result<Vec<Release>>> {
+    fn list<'a>(&'a self, _access: Access<'a>) -> crate::BoxFuture<'a, Result<Vec<Release>>> {
         Box::pin(async move { Ok(self.0.clone()) })
     }
 }
@@ -21,8 +66,9 @@ impl Releases for FixedReleases {
 struct FailingFor(&'static str, Vec<Release>);
 
 impl Releases for FailingFor {
-    fn list<'a>(&'a self, repository: &'a str) -> crate::BoxFuture<'a, Result<Vec<Release>>> {
-        let fails = repository == self.0;
+    fn list<'a>(&'a self, access: Access<'a>) -> crate::BoxFuture<'a, Result<Vec<Release>>> {
+        let fails = access.repository == self.0;
+        let repository = access.repository.to_string();
         let releases = self.1.clone();
         Box::pin(async move {
             if fails {
@@ -33,11 +79,47 @@ impl Releases for FailingFor {
     }
 }
 
+/// Records the bearer token it was given, so a test can assert whether a
+/// credential reached the source and whether a public target sent none.
+struct RecordingReleases {
+    releases: Vec<Release>,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+}
+
+impl RecordingReleases {
+    fn new(
+        releases: Vec<Release>,
+    ) -> (Self, std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>) {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        (
+            Self {
+                releases,
+                seen: seen.clone(),
+            },
+            seen,
+        )
+    }
+}
+
+impl Releases for RecordingReleases {
+    fn list<'a>(&'a self, access: Access<'a>) -> crate::BoxFuture<'a, Result<Vec<Release>>> {
+        self.seen
+            .lock()
+            .expect("recording lock")
+            .push(access.token.map(|t| t.expose().to_string()));
+        let releases = self.releases.clone();
+        Box::pin(async move { Ok(releases) })
+    }
+}
+
 struct FixedDownloader(Vec<u8>, Vec<u8>);
 
 impl Downloader for FixedDownloader {
-    fn get<'a>(&'a self, url: &'a str) -> crate::BoxFuture<'a, Result<Vec<u8>>> {
-        let bytes = if url.contains("sha256") {
+    fn get<'a>(&'a self, asset: &'a AuthenticatedAsset) -> crate::BoxFuture<'a, Result<Vec<u8>>> {
+        // The archive and the checksum now share the same endpoint shape, so the
+        // double distinguishes them by the asset id: the release fixture numbers
+        // the archive before the checksum.
+        let bytes = if asset.url.ends_with("1001") {
             self.1.clone()
         } else {
             self.0.clone()
@@ -53,9 +135,10 @@ fn release(tag: &str, prerelease: bool, assets: &[&str]) -> Release {
         draft: false,
         assets: assets
             .iter()
-            .map(|name| Asset {
+            .enumerate()
+            .map(|(i, name)| Asset {
                 name: (*name).into(),
-                browser_download_url: format!("https://example.test/{name}"),
+                id: 1000 + i as u64,
             })
             .collect(),
     }
@@ -125,29 +208,90 @@ fn selection_picks_the_highest_allowed_version() {
         release("v1.3.0", false, &[ASSET]),
         release("v1.2.0", false, &[ASSET]),
     ];
-    let picked = select(Channel::Stable, &v("1.0.0"), ASSET, ASSET, releases).unwrap();
+    let picked = select(
+        "owner/repo",
+        Channel::Stable,
+        &v("1.0.0"),
+        ASSET,
+        ASSET,
+        releases,
+    )
+    .unwrap();
     assert_eq!(picked.version, v("1.3.0"));
 }
 
 #[test]
 fn selection_ignores_versions_not_above_current() {
     let releases = vec![release("v1.0.0", false, &[ASSET])];
-    assert!(select(Channel::Stable, &v("1.0.0"), ASSET, ASSET, releases).is_none());
+    assert!(select(
+        "owner/repo",
+        Channel::Stable,
+        &v("1.0.0"),
+        ASSET,
+        ASSET,
+        releases
+    )
+    .is_none());
 }
 
 #[test]
 fn selection_requires_a_matching_asset() {
     let releases = vec![release("v2.0.0", false, &["linux-x64.zip"])];
-    assert!(select(Channel::Stable, &v("1.0.0"), ASSET, ASSET, releases).is_none());
+    assert!(select(
+        "owner/repo",
+        Channel::Stable,
+        &v("1.0.0"),
+        ASSET,
+        ASSET,
+        releases
+    )
+    .is_none());
 }
 
 #[test]
 fn selection_attaches_the_checksum_url_when_present() {
     let releases = vec![release("v2.0.0", false, &[ASSET, "windows-x64.zip.sha256"])];
-    let picked = select(Channel::Stable, &v("1.0.0"), ASSET, ASSET, releases).unwrap();
+    let picked = select(
+        "owner/repo",
+        Channel::Stable,
+        &v("1.0.0"),
+        ASSET,
+        ASSET,
+        releases,
+    )
+    .unwrap();
+    // The checksum resolves to the authenticated API endpoint, exactly like the
+    // archive. A public download address would answer 404 for a private source,
+    // so the two must never diverge into one authenticated and one public
+    // request.
     assert_eq!(
         picked.checksum_url.as_deref(),
-        Some("https://example.test/windows-x64.zip.sha256")
+        Some("https://api.github.com/repos/owner/repo/releases/assets/1001")
+    );
+}
+
+/// The archive uses the same authenticated endpoint, never a public download
+/// address: `Asset` no longer even carries one, so this pins the shape rather
+/// than a choice.
+#[test]
+fn selection_resolves_the_archive_to_the_authenticated_endpoint() {
+    let releases = vec![release("v2.0.0", false, &[ASSET])];
+    let picked = select(
+        "owner/repo",
+        Channel::Stable,
+        &v("1.0.0"),
+        ASSET,
+        ASSET,
+        releases,
+    )
+    .unwrap();
+    assert_eq!(
+        picked.download_url,
+        "https://api.github.com/repos/owner/repo/releases/assets/1000"
+    );
+    assert!(
+        !picked.download_url.contains("example.test"),
+        "no public download address may be used"
     );
 }
 
@@ -179,11 +323,11 @@ async fn verified(payload: &[u8], checksum_text: &str) -> Result<Vec<u8>> {
         false,
         &[ASSET, "windows-x64.zip.sha256"],
     )]);
-    let update = check_with(&source, &config(Channel::Stable), &v("1.0.0"))
+    let update = check_with(&source, &config(Channel::Stable), None, &v("1.0.0"))
         .await?
         .unwrap();
     let downloader = FixedDownloader(payload.to_vec(), checksum_text.as_bytes().to_vec());
-    download_and_verify_with(&downloader, &update).await
+    download_and_verify_with(&downloader, &update, None).await
 }
 
 #[tokio::test]
@@ -202,12 +346,12 @@ async fn download_fails_on_a_mismatching_checksum() {
 #[tokio::test]
 async fn download_refuses_an_update_without_checksum_asset() {
     let source = FixedReleases(vec![release("v2.0.0", false, &[ASSET])]);
-    let update = check_with(&source, &config(Channel::Stable), &v("1.0.0"))
+    let update = check_with(&source, &config(Channel::Stable), None, &v("1.0.0"))
         .await
         .unwrap()
         .unwrap();
     let downloader = FixedDownloader(b"payload".to_vec(), Vec::new());
-    let err = download_and_verify_with(&downloader, &update)
+    let err = download_and_verify_with(&downloader, &update, None)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("no SHA-256 asset"), "{err}");
@@ -220,13 +364,13 @@ async fn check_with_returns_the_newest_allowed_release() {
         release("v1.9.0-beta.1", true, &[ASSET]),
         release("v1.7.0", false, &[ASSET]),
     ]);
-    let stable = check_with(&source, &config(Channel::Stable), &v("1.0.0"))
+    let stable = check_with(&source, &config(Channel::Stable), None, &v("1.0.0"))
         .await
         .unwrap()
         .unwrap();
     assert_eq!(stable.version, v("1.7.0"));
 
-    let beta = check_with(&source, &config(Channel::Beta), &v("1.0.0"))
+    let beta = check_with(&source, &config(Channel::Beta), None, &v("1.0.0"))
         .await
         .unwrap()
         .unwrap();
@@ -236,13 +380,29 @@ async fn check_with_returns_the_newest_allowed_release() {
 #[test]
 fn x64_build_does_not_select_the_arm64_asset() {
     let releases = vec![release("v2.0.0", false, &["windows-arm64.zip"])];
-    assert!(select(Channel::Stable, &v("1.0.0"), X64, X64, releases).is_none());
+    assert!(select(
+        "owner/repo",
+        Channel::Stable,
+        &v("1.0.0"),
+        X64,
+        X64,
+        releases
+    )
+    .is_none());
 }
 
 #[test]
 fn arm64_build_does_not_select_the_x64_asset() {
     let releases = vec![release("v2.0.0", false, &["windows-x64.zip"])];
-    assert!(select(Channel::Stable, &v("1.0.0"), ARM64, ARM64, releases).is_none());
+    assert!(select(
+        "owner/repo",
+        Channel::Stable,
+        &v("1.0.0"),
+        ARM64,
+        ARM64,
+        releases
+    )
+    .is_none());
 }
 
 #[test]
@@ -254,12 +414,28 @@ fn a_loose_fragment_still_cannot_cross_architectures() {
         false,
         &["windows-arm64.zip", "windows-x64.zip"],
     )];
-    let picked = select(Channel::Stable, &v("1.0.0"), "64.zip", X64, arm_first).unwrap();
+    let picked = select(
+        "owner/repo",
+        Channel::Stable,
+        &v("1.0.0"),
+        "64.zip",
+        X64,
+        arm_first,
+    )
+    .unwrap();
     assert_eq!(picked.asset_name, X64);
 
     // Mirror case: only the foreign asset exists, so nothing may be selected.
     let only_arm = vec![release("v2.0.0", false, &["windows-arm64.zip"])];
-    assert!(select(Channel::Stable, &v("1.0.0"), "64.zip", X64, only_arm).is_none());
+    assert!(select(
+        "owner/repo",
+        Channel::Stable,
+        &v("1.0.0"),
+        "64.zip",
+        X64,
+        only_arm
+    )
+    .is_none());
 }
 
 #[test]
@@ -271,7 +447,15 @@ fn an_arm_pattern_on_an_x64_installation_selects_nothing() {
         false,
         &["windows-x64.zip", "windows-arm64.zip"],
     )];
-    assert!(select(Channel::Stable, &v("1.0.0"), "arm64.zip", X64, both).is_none());
+    assert!(select(
+        "owner/repo",
+        Channel::Stable,
+        &v("1.0.0"),
+        "arm64.zip",
+        X64,
+        both
+    )
+    .is_none());
 }
 
 #[test]
@@ -281,8 +465,24 @@ fn each_architecture_selects_its_own_asset_from_a_dual_release() {
         false,
         &["windows-arm64.zip", "windows-x64.zip"],
     )];
-    let x64 = select(Channel::Stable, &v("1.0.0"), X64, X64, releases.clone()).unwrap();
-    let arm = select(Channel::Stable, &v("1.0.0"), ARM64, ARM64, releases).unwrap();
+    let x64 = select(
+        "owner/repo",
+        Channel::Stable,
+        &v("1.0.0"),
+        X64,
+        X64,
+        releases.clone(),
+    )
+    .unwrap();
+    let arm = select(
+        "owner/repo",
+        Channel::Stable,
+        &v("1.0.0"),
+        ARM64,
+        ARM64,
+        releases,
+    )
+    .unwrap();
     assert_eq!(x64.asset_name, X64);
     assert_eq!(arm.asset_name, ARM64);
 }
@@ -296,6 +496,7 @@ fn a_pattern_that_is_not_a_suffix_yields_no_update() {
     )];
     // A prefix no longer matches: "guidance-runtime" is not a suffix.
     assert!(select(
+        "owner/repo",
         Channel::Stable,
         &v("1.0.0"),
         "guidance-runtime",
@@ -463,7 +664,8 @@ async fn check_all_reports_one_result_per_target_and_isolates_failures() {
         target("second-target", Visibility::Public),
     ]);
 
-    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+    let store = FixedCredentialStore(None);
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
 
     assert_eq!(run.targets.len(), 2, "n targets must yield n checks");
     assert_eq!(run.targets[0].target, crate::LEGACY_TARGET_NAME);
@@ -480,7 +682,8 @@ async fn a_foreign_target_is_not_installed_and_carries_no_version() {
     let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
     let cfg = cfg_of(vec![target("guidance", Visibility::Public)]);
 
-    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+    let store = FixedCredentialStore(None);
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
 
     let check = &run.targets[0];
     assert_eq!(check.state, TargetState::NotInstalled);
@@ -491,20 +694,25 @@ async fn a_foreign_target_is_not_installed_and_carries_no_version() {
     assert_eq!(run.exit_status(), 0);
 }
 
-/// The private-target interim rule (superseded by T022). This test exists so a
-/// refactor cannot silently turn a missing capability into "up to date", which
-/// is exactly the misreport FR-013 forbids. When T022 lands, this test moves to
-/// asserting the real credential path.
+/// A private target whose credential entry is absent reports the pinned phrase.
+/// The store double returns no secret, so this exercises the real credential
+/// path rather than an interim rule; the unconditional private branch it once
+/// covered no longer exists.
 #[tokio::test]
 async fn a_private_target_reports_inaccessible_with_the_verbatim_phrase() {
     let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
     let cfg = cfg_of(vec![runtime_target(Visibility::Private)]);
 
-    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+    let store = FixedCredentialStore(None);
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
 
     let check = &run.targets[0];
     assert_eq!(check.state, TargetState::Inaccessible);
-    assert_eq!(check.detail.as_deref(), Some("no access to update source"));
+    assert!(check
+        .detail
+        .as_deref()
+        .unwrap_or_default()
+        .starts_with(crate::report::PHRASE));
     assert!(
         check.offered_version.is_none(),
         "an inaccessible target must not advertise an offered version"
@@ -519,7 +727,8 @@ async fn a_public_target_with_a_newer_release_reports_update_available() {
     let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
     let cfg = cfg_of(vec![runtime_target(Visibility::Public)]);
 
-    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+    let store = FixedCredentialStore(None);
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
 
     assert_eq!(run.targets[0].state, TargetState::UpdateAvailable);
     assert_eq!(run.targets[0].offered_version.as_deref(), Some("2.0.0"));
@@ -533,7 +742,8 @@ async fn a_public_target_with_no_newer_release_is_up_to_date() {
     let source = FixedReleases(vec![release("v1.0.0", false, &[X64])]);
     let cfg = cfg_of(vec![runtime_target(Visibility::Public)]);
 
-    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+    let store = FixedCredentialStore(None);
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
 
     assert_eq!(run.targets[0].state, TargetState::UpToDate);
     assert_eq!(run.exit_status(), 0);
@@ -549,7 +759,8 @@ async fn a_run_with_a_mixed_outcome_exits_two() {
         runtime_target_named("private-runtime", Visibility::Private),
     ]);
 
-    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+    let store = FixedCredentialStore(None);
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
 
     assert_eq!(run.targets[0].state, TargetState::UpdateAvailable);
     assert_eq!(run.targets[1].state, TargetState::Inaccessible);
@@ -569,7 +780,8 @@ async fn an_unreachable_first_source_does_not_stop_the_second() {
     let source = FailingFor("broken/repo", vec![release("v2.0.0", false, &[X64])]);
     let cfg = cfg_of(vec![failing, healthy]);
 
-    let run = crate::check_all(&source, &cfg, &v("1.0.0")).await;
+    let store = FixedCredentialStore(None);
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
 
     assert_eq!(run.targets.len(), 2);
     assert_eq!(run.targets[0].state, TargetState::NetworkError);
@@ -631,18 +843,291 @@ async fn a_legacy_flat_configuration_produces_the_historical_outcome() {
 
     // Up to date: the exact pre-change wording, including the channel name.
     let source = FixedReleases(vec![release("v1.0.0", false, &[X64])]);
-    let outcome = crate::check_update_with(&source, only, &v("1.0.0"))
+    let outcome = crate::check_update_with(&source, only, None, &v("1.0.0"))
         .await
         .unwrap();
     assert_eq!(outcome.message(), "No update available on stable channel");
 
     // Update available: the exact pre-change wording for the other branch.
     let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
-    let outcome = crate::check_update_with(&source, only, &v("1.0.0"))
+    let outcome = crate::check_update_with(&source, only, None, &v("1.0.0"))
         .await
         .unwrap();
     assert_eq!(
         outcome.message(),
         "Update available: 1.0.0 -> 2.0.0 (stable)"
     );
+}
+
+// --- credential port -------------------------------------------------------
+
+/// A secret must not render its value: every error path formats its context,
+/// so a derived Debug would eventually put a token into a log line.
+#[test]
+fn a_secret_never_renders_its_value() {
+    let secret = Secret::new("ghp_sentinel_do_not_print");
+    assert!(!format!("{secret:?}").contains("sentinel"), "{secret:?}");
+    assert!(!format!("{secret}").contains("sentinel"), "{secret}");
+    assert!(format!("{secret:?}").contains("redacted"));
+    assert_eq!(secret.expose(), "ghp_sentinel_do_not_print");
+}
+
+/// An absent entry and an unusable store must be distinguishable: the remedy
+/// differs between provisioning an entry and fixing the store.
+#[tokio::test]
+async fn an_absent_entry_and_an_unavailable_store_are_different_shapes() {
+    let absent = FixedCredentialStore(None).get("guidance").await;
+    assert!(matches!(absent, Ok(None)), "{absent:?}");
+
+    let unavailable = UnavailableCredentialStore.get("guidance").await;
+    assert!(
+        matches!(unavailable, Err(CredentialStoreError::Unavailable(_))),
+        "{unavailable:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_present_entry_yields_the_secret() {
+    let store = FixedCredentialStore(Some(Secret::new("token-value")));
+    let got = store.get("guidance").await.unwrap();
+    assert_eq!(got.unwrap().expose(), "token-value");
+}
+
+/// The NoCredentialStore double is the proof that a public path never reads a
+/// credential: it panics if it is ever consulted. This test pins the contract
+/// of the double itself, so a future refactor cannot quietly make it a no-op.
+#[tokio::test]
+#[should_panic(expected = "must not consult the credential store")]
+async fn the_no_credential_store_panics_when_consulted() {
+    let _ = NoCredentialStore.get("guidance").await;
+}
+
+// --- authenticated private access (US2) ------------------------------------
+
+fn private_runtime_target() -> UpdateTarget {
+    let mut t = runtime_target(Visibility::Private);
+    t.credential_entry = Some("guidance-update".into());
+    t
+}
+
+/// FR-010: a private target with a valid credential is read successfully, and
+/// the credential actually reaches the source adapter.
+#[tokio::test]
+async fn a_private_target_with_a_credential_reports_its_real_state() {
+    let (source, seen) = RecordingReleases::new(vec![release("v2.0.0", false, &[X64])]);
+    let store = FixedCredentialStore(Some(Secret::new("ghp_valid")));
+    let cfg = cfg_of(vec![private_runtime_target()]);
+
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
+
+    assert_eq!(run.targets[0].state, TargetState::UpdateAvailable);
+    assert_eq!(run.targets[0].offered_version.as_deref(), Some("2.0.0"));
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        [Some("ghp_valid".to_string())],
+        "the credential must reach the adapter"
+    );
+}
+
+/// FR-012: a public target never consults the credential store. The store
+/// double panics if it is touched, so this fails loudly if that changes.
+#[tokio::test]
+async fn a_public_target_never_consults_the_credential_store() {
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let store = NoCredentialStore;
+    let cfg = cfg_of(vec![runtime_target(Visibility::Public)]);
+
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
+
+    assert_eq!(run.targets[0].state, TargetState::UpdateAvailable);
+}
+
+/// A public target sends no token even when a store would supply one.
+#[tokio::test]
+async fn a_public_target_sends_no_token() {
+    let (source, seen) = RecordingReleases::new(vec![release("v2.0.0", false, &[X64])]);
+    let store = FixedCredentialStore(Some(Secret::new("ghp_must_not_be_used")));
+    let cfg = cfg_of(vec![runtime_target(Visibility::Public)]);
+
+    let _ = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
+
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        [None],
+        "a public target must send no Authorization header"
+    );
+}
+
+/// FR-013: an entry that is named but not provisioned is an access problem
+/// carrying the verbatim phrase.
+#[tokio::test]
+async fn an_absent_credential_reports_inaccessible_with_the_phrase() {
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let store = FixedCredentialStore(None);
+    let cfg = cfg_of(vec![private_runtime_target()]);
+
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
+
+    let check = &run.targets[0];
+    assert_eq!(check.state, TargetState::Inaccessible);
+    assert!(check
+        .detail
+        .as_deref()
+        .unwrap_or_default()
+        .starts_with(crate::report::PHRASE));
+    assert_eq!(run.exit_status(), 2);
+}
+
+/// An unusable store is a different outcome from an absent entry, because the
+/// remedy differs.
+#[tokio::test]
+async fn an_unusable_store_reports_credential_store_unavailable() {
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let store = UnavailableCredentialStore;
+    let cfg = cfg_of(vec![private_runtime_target()]);
+
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
+
+    assert_eq!(
+        run.targets[0].state,
+        TargetState::CredentialStoreUnavailable
+    );
+    assert_ne!(run.targets[0].state, TargetState::Inaccessible);
+}
+
+/// Operator decision: access is resolved before the installed-version
+/// question, so a private target with a valid credential and no local
+/// installation still reports the access outcome rather than a bare "not
+/// installed". The credential here is absent, which is the case a user without
+/// provisioned access actually hits.
+#[tokio::test]
+async fn access_problems_win_over_not_installed() {
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let store = FixedCredentialStore(None);
+    // A foreign name means no installed version is known for it.
+    let mut target = private_runtime_target();
+    target.name = "guidance".into();
+    let cfg = cfg_of(vec![target]);
+
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
+
+    assert_eq!(
+        run.targets[0].state,
+        TargetState::Inaccessible,
+        "an operator without a credential must hear about access, not about installation"
+    );
+}
+
+/// Refusal and non-existence must be indistinguishable (FR-014, SC-005).
+#[test]
+fn refusal_and_non_existence_classify_identically() {
+    use crate::{classify_status, SourceError};
+    use reqwest::StatusCode;
+
+    let unauthorized = classify_status(StatusCode::UNAUTHORIZED);
+    let forbidden = classify_status(StatusCode::FORBIDDEN);
+    let missing = classify_status(StatusCode::NOT_FOUND);
+
+    assert_eq!(unauthorized, SourceError::Inaccessible);
+    assert_eq!(unauthorized, forbidden);
+    assert_eq!(unauthorized, missing);
+    // And the rendered text names no repository.
+    assert_eq!(unauthorized.to_string(), "no access to update source");
+    assert!(!unauthorized.to_string().contains("github.com"));
+}
+
+/// A source that answers with a refusal, so the downcast in
+/// `classify_source_error` is exercised through `check_all` rather than only
+/// through `classify_status`. Replacing the Inaccessible arm with NetworkError
+/// must fail this test.
+struct RefusingReleases;
+
+impl Releases for RefusingReleases {
+    fn list<'a>(&'a self, _access: Access<'a>) -> crate::BoxFuture<'a, Result<Vec<Release>>> {
+        Box::pin(async move { Err(crate::SourceError::Inaccessible.into()) })
+    }
+}
+
+/// FR-013/FR-015: a refusal arriving through the port is classified as an
+/// access problem, not as a connectivity problem.
+#[tokio::test]
+async fn a_refusal_reaching_check_all_is_inaccessible_not_a_network_error() {
+    let store = FixedCredentialStore(Some(Secret::new("ghp_valid")));
+    let cfg = cfg_of(vec![runtime_target(Visibility::Public)]);
+
+    let run = crate::check_all(&RefusingReleases, &store, &cfg, &v("1.0.0")).await;
+
+    assert_eq!(
+        run.targets[0].state,
+        TargetState::Inaccessible,
+        "a refusal must not be reported as a connectivity problem"
+    );
+}
+
+/// FR-013: a named but unprovisioned entry must tell the operator what to do.
+/// This is the difference between "you were denied" and "nothing was ever
+/// provisioned", and conflating them is what the review flagged.
+#[tokio::test]
+async fn an_absent_credential_names_the_entry_and_the_step() {
+    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let store = FixedCredentialStore(None);
+    let cfg = cfg_of(vec![private_runtime_target()]);
+
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
+
+    let detail = run.targets[0].detail.as_deref().unwrap_or_default();
+    assert!(detail.starts_with(crate::report::PHRASE), "{detail}");
+    assert!(detail.contains("guidance-update"), "{detail}");
+    assert!(detail.contains("provision"), "{detail}");
+
+    // And the rendered line shows it rather than suppressing it.
+    let line = crate::render_check(&run.targets[0]);
+    assert!(line.contains(crate::report::PHRASE), "{line}");
+    assert!(line.contains("provision"), "{line}");
+}
+
+/// `AuthenticatedAsset` holds a token, so its Debug must delegate to the
+/// redacting impl rather than render the struct field by field.
+#[test]
+fn an_authenticated_asset_never_renders_its_token() {
+    let asset = AuthenticatedAsset {
+        url: "https://api.github.com/repos/a/b/releases/assets/1".into(),
+        token: Some(Secret::new("ghp_sentinel_asset")),
+    };
+    let rendered = format!("{asset:?}");
+    assert!(!rendered.contains("sentinel"), "{rendered}");
+    assert!(rendered.contains("redacted"), "{rendered}");
+}
+
+/// A target with no installed version still has its source read, so an access
+/// problem is not reported as a clean "not installed" run. This is the case
+/// where FR-015's four outcomes would otherwise collapse.
+#[tokio::test]
+async fn an_unreachable_source_on_an_uninstalled_target_is_not_a_clean_run() {
+    let (source, _) = RecordingReleases::new(Vec::new());
+    let store = FixedCredentialStore(None);
+    let mut target = private_runtime_target();
+    target.name = "not-on-this-machine".into();
+    let cfg = cfg_of(vec![target]);
+
+    let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
+
+    // No credential, so access fails before the source is even asked.
+    assert_eq!(run.targets[0].state, TargetState::Inaccessible);
+    assert_eq!(run.exit_status(), 2);
+}
+
+/// With a credential present but the source refusing, a target that is not
+/// installed reports the access problem rather than a clean run.
+#[tokio::test]
+async fn a_refusal_on_an_uninstalled_target_is_reported_as_access() {
+    let store = FixedCredentialStore(Some(Secret::new("ghp_valid")));
+    let mut target = runtime_target(Visibility::Public);
+    target.name = "not-on-this-machine".into();
+    let cfg = cfg_of(vec![target]);
+
+    let run = crate::check_all(&RefusingReleases, &store, &cfg, &v("1.0.0")).await;
+
+    assert_eq!(run.targets[0].state, TargetState::Inaccessible);
+    assert_eq!(run.exit_status(), 2);
 }

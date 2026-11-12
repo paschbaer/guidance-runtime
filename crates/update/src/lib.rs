@@ -15,6 +15,7 @@ mod command;
 mod config;
 #[cfg(test)]
 mod config_tests;
+mod credentials;
 mod github;
 mod install;
 mod params;
@@ -32,8 +33,13 @@ pub use command::{
     uses_legacy_output, UpdateOutcome,
 };
 pub use config::{ConfigFile, UpdateConfig, UpdateTarget, Visibility, LEGACY_TARGET_NAME};
+pub use credentials::{command_for, CredentialCommand, PlatformCredentialStore, SERVICE};
 pub use github::GitHubReleases;
-pub use ports::{BoxFuture, Downloader, Installer, Releases};
+pub use github::{classify_status, SourceError};
+pub use ports::{
+    Access, AuthenticatedAsset, BoxFuture, CredentialStore, CredentialStoreError, Downloader,
+    Installer, Releases, Secret,
+};
 pub use report::{render_check, render_run, TargetCheck, TargetState, UpdateRun};
 
 pub use selection::{is_allowed, parse_checksum, select};
@@ -80,7 +86,11 @@ pub struct Release {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Asset {
     pub name: String,
-    pub browser_download_url: String,
+    /// The numeric asset id, needed to build the authenticated API address a
+    /// private source requires. `browser_download_url` is served without
+    /// authentication and 404s for a private repository, so it is deliberately
+    /// absent: there is no field a caller could mistakenly use instead.
+    pub id: u64,
 }
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct AvailableUpdate {
@@ -92,22 +102,43 @@ pub struct AvailableUpdate {
     pub download_url: String,
     pub checksum_url: Option<String>,
 }
+
+/// Builds the address an asset must be fetched from.
+///
+/// The authenticated API endpoint, never `browser_download_url`: the latter
+/// requires no credential, which is precisely why it is unusable for a private
+/// source — it answers 404 to an authorized caller.
+pub fn asset_endpoint(repository: &str, asset_id: u64) -> String {
+    format!("https://api.github.com/repos/{repository}/releases/assets/{asset_id}")
+}
 /// Looks up the newest update offered on the configured channel.
-pub async fn check(target: &UpdateTarget, current: &Version) -> Result<Option<AvailableUpdate>> {
+pub async fn check(
+    target: &UpdateTarget,
+    token: Option<&Secret>,
+    current: &Version,
+) -> Result<Option<AvailableUpdate>> {
     let source = github::GitHubReleases::new();
-    check_with(&source, target, current).await
+    check_with(&source, target, token, current).await
 }
 
 /// Channel-aware release lookup against an arbitrary [`Releases`] port.
 pub async fn check_with(
     source: &dyn Releases,
     target: &UpdateTarget,
+    token: Option<&Secret>,
     current: &Version,
 ) -> Result<Option<AvailableUpdate>> {
-    let releases = source.list(&target.repository).await?;
+    let releases = source
+        .list(ports::Access {
+            target: &target.name,
+            repository: &target.repository,
+            token,
+        })
+        .await?;
     let pattern = target.resolved_asset_pattern()?;
     let expected = arch::asset_suffix_for_arch(arch::running_arch())?;
     Ok(selection::select(
+        &target.repository,
         target.channel,
         current,
         &pattern,
@@ -117,21 +148,37 @@ pub async fn check_with(
 }
 
 /// Downloads the update asset and verifies it against the release checksum.
-pub async fn download_and_verify(update: &AvailableUpdate) -> Result<Vec<u8>> {
+pub async fn download_and_verify(
+    update: &AvailableUpdate,
+    token: Option<&Secret>,
+) -> Result<Vec<u8>> {
     let downloader = github::HttpDownloader::new();
-    download_and_verify_with(&downloader, update).await
+    download_and_verify_with(&downloader, update, token).await
 }
 
 /// Checksum-verified download against an arbitrary [`Downloader`] port.
+///
+/// The archive and its checksum both travel as an
+/// [`ports::AuthenticatedAsset`], so they cannot diverge into one authenticated
+/// request and one public one.
 pub async fn download_and_verify_with(
     downloader: &dyn Downloader,
     update: &AvailableUpdate,
+    token: Option<&Secret>,
 ) -> Result<Vec<u8>> {
-    let bytes = downloader.get(&update.download_url).await?;
+    let archive = ports::AuthenticatedAsset {
+        url: update.download_url.clone(),
+        token: token.cloned(),
+    };
+    let bytes = downloader.get(&archive).await?;
     let Some(url) = &update.checksum_url else {
         bail!("release has no SHA-256 asset; refusing update")
     };
-    let text = String::from_utf8_lossy(&downloader.get(url).await?).into_owned();
+    let checksum = ports::AuthenticatedAsset {
+        url: url.clone(),
+        token: token.cloned(),
+    };
+    let text = String::from_utf8_lossy(&downloader.get(&checksum).await?).into_owned();
     let expected =
         selection::parse_checksum(&text, &update.asset_name).context("empty checksum file")?;
     let actual = params::sha256_hex(&bytes);

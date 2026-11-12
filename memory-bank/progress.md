@@ -29,11 +29,14 @@ depend on input from the maintainers.
 - [x] Implement Spec-Kit feature 001 phases 1-3: multi-target update configuration, seven-state
       outcome model, platform-aware archive suffix table, per-target fan-out with failure
       isolation, exit statuses, and CLI wiring. Workspace tests 41 → 91.
+- [x] Implement feature 001 phase 4: CredentialStore port with three platform backends,
+      authenticated GitHub adapter over the API asset endpoint, and credential wiring in the check
+      path. Workspace tests 91 → 109.
 
 ## In Progress
 
-- [ ] Feature 001 User Stories 2-4 (T016-T040): private-source access, structured output,
-      per-target installation, macOS CI leg.
+- [ ] Feature 001 User Stories 3-4 (T023-T040): structured output, per-target installation, macOS
+      CI leg, operator documentation.
 - [ ] Complete `projectBrief.md` (owner and primary users still open).
 - [ ] Document user needs and domain rules in `productContext.md`.
 
@@ -50,14 +53,14 @@ depend on input from the maintainers.
 - `projectBrief.md` and `productContext.md` still contain template placeholders.
 - The Windows backup/restore transaction is still untested (RW-005).
 - IPC handlers have no direct test seam until a supervisor port exists (RW-006).
-- A private update target always reports `no access to update source`; private-source access is
-  unimplemented (feature 001 US2).
+- A private update target reports `no access to update source` when its credential entry is absent,
+  with a provisioning hint. Private-source access is implemented.
 - Only the runtime target reports an installed version; other targets report `not installed`
   because no per-target version marker exists yet.
-- Every source-list failure reports as a network error, so an authorization problem cannot be
-  distinguished from a transport problem for a public target.
-- The HTTP adapter's error text contains the full repository URL, which would disclose a private
-  target's path once private targets are routed through it.
+- A proxy that answers with its own authentication challenge is reported as a connectivity problem
+  rather than an access problem; the transport layer does not expose the distinction.
+- The credential backends are not verified against a real store by any gate; no Secret Service
+  daemon or Keychain is available in CI.
 
 ## Milestones
 
@@ -128,3 +131,17 @@ depend on input from the maintainers.
   fixed as a result, including an FR-003 violation where a channel change reshaped a legacy file
   and an SC-001 gap where the legacy test proved a path the CLI never took.
 - Workspace tests 41 → 91.
+
+### 2026-11-12 — Multi-target update sources (phase 4)
+
+- Added a `CredentialStore` port with three cfg-gated backends and a redacting `Secret` newtype.
+- Introduced `Access` and `AuthenticatedAsset` so a target's identity and its credential travel
+  together; `browser_download_url` was removed from `Asset` rather than left unused.
+- The GitHub adapter sends a bearer token only for a private target, fetches bytes from the API
+  asset endpoint, and classifies 401/403/404 identically without disclosing the repository path.
+- Credential wiring replaced the interim unconditional private branch; an absent entry now reports
+  the entry name and the provisioning step.
+- Two independent reviews were run. Both found real defects: the command backends collapsed every
+  non-zero exit into "credential absent", which would have reported a locked keychain as a missing
+  credential, and FR-013's provisioning step was not implemented at all.
+- Workspace tests 91 → 109.

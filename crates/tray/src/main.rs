@@ -148,7 +148,8 @@ impl winit::application::ApplicationHandler for TrayApp {
                     self.runtime.block_on(async {
                         let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
                         let source = guidance_update::GitHubReleases::new();
-                        Ok(guidance_update::check_all(&source, &cfg, &current).await)
+                        let store = guidance_update::PlatformCredentialStore::new();
+                        Ok(guidance_update::check_all(&source, &store, &cfg, &current).await)
                     })
                 });
             match outcome {

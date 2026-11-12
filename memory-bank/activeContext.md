@@ -4,16 +4,15 @@
 
 ## Current Focus
 
-Executing Spec-Kit feature `001-multi-target-update-sources`. The first three phases (setup,
-foundational, User Story 1) are implemented on `feature/multi-target-update-sources`: the updater
-fans out over a configurable target list instead of addressing one hardcoded repository, and the
-platform suffix table covers Windows, macOS and Linux.
+Executing Spec-Kit feature `001-multi-target-update-sources`. Phases 1-4 are implemented on
+`feature/multi-target-update-sources`: the updater fans out over a configurable target list, the
+platform suffix table covers Windows, macOS and Linux, and a private target is read with a
+credential from the platform's per-user store.
 
 ## Current Objective
 
-Continue with User Story 2 (authenticated private-source access, T016-T022). Until it lands, a
-private target reports `no access to update source` unconditionally and must not be presented as
-working private-source support.
+Continue with User Story 3 (structured output, T023-T027). Until it lands, only the human-readable
+output exists and the tray still collapses an all-failing run to "Up to date".
 
 ## Current Work
 
@@ -27,12 +26,29 @@ working private-source support.
 - [x] Ratify the constitution v1.0.0 (2026-11-12); Sync Impact Report removed.
 - [x] Implement Spec-Kit feature 001 phases 1-3 (T001-T015): multi-target configuration, outcome
       model, platform-aware suffix table, fan-out, exit statuses, CLI wiring.
-- [ ] Continue feature 001 with US2 (T016-T022) — private-source access.
+- [x] Implement phase 4 (T016-T022): CredentialStore port with Windows Credential Manager, macOS
+      Keychain and Linux Secret Service backends; authenticated GitHub adapter using the asset
+      endpoint; refusal classification; credential wiring in the check path.
+- [ ] Continue feature 001 with US3 (T023-T027) — structured output.
 - [ ] Complete `projectBrief.md` — blocked on owner and primary-user input.
 - [ ] Complete `productContext.md` — user journeys need product input.
 
 ## Recent Changes
 
+- `crates/update/src/credentials.rs` (new): three cfg-gated credential backends. Windows reads
+  `guidance:update:<entry>` through `CredReadW`; macOS and Linux build a `CredentialCommand` in a
+  pure function that a test inspects, and only the documented "item not found" status counts as
+  absent — every other failure is an unusable store, because the remedies differ.
+- `crates/update/src/ports.rs`: `CredentialStore` port, a redacting `Secret` newtype, and the
+  `Access` / `AuthenticatedAsset` shapes that keep a target identity and its credential together.
+- `crates/update/src/github.rs`: sends a bearer token only for a private target, fetches bytes from
+  the API asset endpoint, classifies 401/403/404 identically as an access problem, and no longer
+  puts the repository URL into any error text.
+- `crates/update/src/lib.rs`: `Asset` carries only `id` and `name`; `browser_download_url` was
+  removed so no caller can fall back to an unauthenticated address.
+- `crates/update/src/command.rs`: `token_for` resolves the credential per visibility and a public
+  target never consults the store; an absent entry reports the pinned phrase plus the entry name
+  and the provisioning step.
 - `crates/update/src/`: added `config.rs` (target list, legacy flat form, validation naming the
   offending field, file-shape preservation on save), `report.rs` (closed seven-state outcome model,
   `UpdateRun`, text rendering), `config_tests.rs`. `arch.rs` widened from Windows-only to a
@@ -78,6 +94,18 @@ working private-source support.
 
 ## Recent Decisions
 
+- The ports carry target identity and credential together (`Access`, `AuthenticatedAsset`) rather
+  than as separate parameters, so a token cannot be paired with the wrong repository by accident.
+- `browser_download_url` was removed from `Asset` instead of kept unused: a field a caller could
+  reach for is the defect the change exists to prevent.
+- A refusal is `Inaccessible` and everything else is a transport failure, decided by status code
+  before any transport error is inspected. The consequence is deliberate: a typo in a public
+  repository name now reads as an access problem, which the docs state.
+- Only the documented "item not found" exit status counts as an absent credential. Treating every
+  non-zero exit that way was a fail-open bug caught in review: a locked keychain would have been
+  reported as a missing credential.
+- Access is resolved before the installed-version question, by operator decision, because a user
+  without a credential cannot obtain the product at all.
 - The update configuration is modelled as a raw `ConfigFile` (all fields optional) plus a
   normalized `UpdateConfig`, deliberately not as a serde untagged enum: an untagged enum reports
   "data did not match any variant", and the specification requires the offending field to be named.
@@ -111,14 +139,14 @@ working private-source support.
 
 1. Commit the ratified constitution as a constitution-only change, separately from the feature work
    that shares this working tree (a reviewer flagged the mix against the Governance section).
-2. Continue feature 001 with US2 (T016-T022). When routing private targets through the HTTP
-   adapter, fix the adapter's error text: it currently carries the full repository URL, which would
-   disclose the private path and violate FR-014.
-3. Answer the open questions above, then fill `projectBrief.md` and `productContext.md`.
-4. Restart the Guidance server so the new `.guidance/` configuration is snapshotted.
-5. Address RW-004/RW-005: add a service-control port so the backup/restore transaction becomes
-   testable.
+2. Continue feature 001 with US3 (T023-T027), which must not collapse the two rendering paths the
+   legacy contract depends on without re-deciding SC-001.
+3. Address the open review item: a proxy that answers with its own authentication challenge is
+   reported as a connectivity problem, because the transport layer does not expose the
+   distinction. Needs a transport-level probe, not a status-code mapping.
+4. Answer the open questions above, then fill `projectBrief.md` and `productContext.md`.
+5. Restart the Guidance server so the new `.guidance/` configuration is snapshotted.
 
 ## Last Updated
 
-2026-11-12 (agent session: feature 001 phases 1-3 implemented)
+2026-11-12 (agent session: feature 001 phase 4 implemented)

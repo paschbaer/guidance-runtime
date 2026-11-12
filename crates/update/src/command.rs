@@ -68,8 +68,12 @@ pub fn set_or_get_channel(
 }
 
 /// Checks for an update and returns a renderable outcome.
-pub async fn check_update(target: &UpdateTarget, current: &Version) -> Result<UpdateOutcome> {
-    match crate::check(target, current).await? {
+pub async fn check_update(
+    target: &UpdateTarget,
+    token: Option<&crate::Secret>,
+    current: &Version,
+) -> Result<UpdateOutcome> {
+    match crate::check(target, token, current).await? {
         Some(update) => Ok(UpdateOutcome::Available(update)),
         None => Ok(UpdateOutcome::UpToDate(target.channel)),
     }
@@ -82,9 +86,10 @@ pub async fn check_update(target: &UpdateTarget, current: &Version) -> Result<Up
 pub async fn check_update_with(
     source: &dyn crate::Releases,
     target: &UpdateTarget,
+    token: Option<&crate::Secret>,
     current: &Version,
 ) -> Result<UpdateOutcome> {
-    match crate::check_with(source, target, current).await? {
+    match crate::check_with(source, target, token, current).await? {
         Some(update) => Ok(UpdateOutcome::Available(update)),
         None => Ok(UpdateOutcome::UpToDate(target.channel)),
     }
@@ -117,24 +122,69 @@ pub fn current_version() -> Result<Version> {
 /// hide the others.
 pub async fn check_all(
     source: &dyn crate::Releases,
+    store: &dyn crate::CredentialStore,
     config: &UpdateConfig,
     current: &Version,
 ) -> crate::UpdateRun {
     let mut checks = Vec::with_capacity(config.targets().len());
     for target in config.targets() {
-        checks.push(check_one(source, target, current).await);
+        checks.push(check_one(source, store, target, current).await);
     }
     crate::UpdateRun::new(checks)
+}
+
+/// The credential for a target, or the outcome that replaces one.
+///
+/// A public target yields `Ok(None)` without consulting the store at all,
+/// which is what keeps a public check working on a machine where no credential
+/// was ever provisioned.
+async fn token_for(
+    store: &dyn crate::CredentialStore,
+    target: &UpdateTarget,
+) -> std::result::Result<Option<crate::Secret>, (crate::TargetState, Option<String>)> {
+    use crate::SERVICE;
+    use crate::{TargetState, Visibility};
+
+    if target.visibility != Visibility::Private {
+        return Ok(None);
+    }
+    let Some(entry) = target.credential_entry.as_deref() else {
+        // Configuration validation already refuses this, so reaching it means
+        // the target was built programmatically; report rather than panic.
+        return Err((
+            TargetState::Inaccessible,
+            Some("no access to update source: the target names no credential entry".to_string()),
+        ));
+    };
+    match store.get(entry).await {
+        Ok(Some(secret)) => Ok(Some(secret)),
+        // Named but not provisioned. This is an access problem, so the pinned
+        // phrase stays the leading text, but the detail names the missing entry
+        // and the step to take: an operator who never provisioned anything and
+        // one whose request was refused have different problems, and telling
+        // them apart is what makes the report actionable (FR-013).
+        Ok(None) => Err((
+            TargetState::Inaccessible,
+            Some(format!(
+                "no access to update source: no credential named '{entry}' is provisioned \
+                 on this machine; provision it as '{SERVICE}:{entry}'"
+            )),
+        )),
+        // The store itself could not be consulted: a different remedy, so a
+        // different state.
+        Err(e) => Err((TargetState::CredentialStoreUnavailable, Some(e.to_string()))),
+    }
 }
 
 /// Checks a single target, converting every failure into a state instead of an
 /// error, so the caller always gets a reportable result.
 async fn check_one(
     source: &dyn crate::Releases,
+    store: &dyn crate::CredentialStore,
     target: &UpdateTarget,
     current: &Version,
 ) -> crate::TargetCheck {
-    use crate::{TargetCheck, TargetState, Visibility, LEGACY_TARGET_NAME};
+    use crate::{TargetCheck, TargetState, LEGACY_TARGET_NAME};
 
     // Only the target this binary belongs to can report the running version as
     // its installed version. Any other product runs a different release, and
@@ -147,31 +197,69 @@ async fn check_one(
         None
     };
 
-    // No credential path exists yet (T022 supplies it), so a private target
-    // cannot be read at all. This is checked BEFORE the installed-version
-    // question: a machine that cannot reach the source needs to hear that, and
-    // reporting "not installed" first would bury the actionable problem.
-    // Superseded by T022.
-    if target.visibility == Visibility::Private {
-        return TargetCheck::new(
-            &target.name,
-            TargetState::Inaccessible,
-            installed,
-            None,
-            target.channel.to_string(),
-            Some("no access to update source".to_string()),
-        );
-    }
+    // Access is resolved BEFORE the installed-version question, by operator
+    // decision: a user without a credential cannot obtain the product at all,
+    // so telling them it is "not installed" would bury the actionable problem.
+    let token = match token_for(store, target).await {
+        Ok(t) => t,
+        Err((state, detail)) => {
+            return TargetCheck::new(
+                &target.name,
+                state,
+                installed,
+                None,
+                target.channel.to_string(),
+                detail,
+            )
+        }
+    };
 
     if installed.is_none() {
-        return TargetCheck::new(
-            &target.name,
-            TargetState::NotInstalled,
-            None,
-            None,
-            target.channel.to_string(),
-            None,
-        );
+        // A target we have no installed version for still gets its source read
+        // before we call it "not installed". Otherwise an access problem on
+        // such a target would be reported as a clean run, and FR-015's four
+        // outcomes would collapse into one.
+        match source
+            .list(crate::Access {
+                target: &target.name,
+                repository: &target.repository,
+                token: token.as_ref(),
+            })
+            .await
+        {
+            Err(e) if matches!(classify_source_error(&e), TargetState::Inaccessible) => {
+                return TargetCheck::new(
+                    &target.name,
+                    TargetState::Inaccessible,
+                    None,
+                    None,
+                    target.channel.to_string(),
+                    Some(e.to_string()),
+                )
+            }
+            Err(e) => {
+                return TargetCheck::new(
+                    &target.name,
+                    TargetState::NetworkError,
+                    None,
+                    None,
+                    target.channel.to_string(),
+                    Some(e.to_string()),
+                )
+            }
+            // The source answered: the honest report is still "not installed",
+            // because there is no local version to compare against.
+            Ok(_) => {
+                return TargetCheck::new(
+                    &target.name,
+                    TargetState::NotInstalled,
+                    None,
+                    None,
+                    target.channel.to_string(),
+                    None,
+                )
+            }
+        }
     }
 
     let pattern = match target.resolved_asset_pattern() {
@@ -188,17 +276,25 @@ async fn check_one(
         }
     };
 
-    let releases = match source.list(&target.repository).await {
+    let releases = match source
+        .list(crate::Access {
+            target: &target.name,
+            repository: &target.repository,
+            token: token.as_ref(),
+        })
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
+            let state = classify_source_error(&e);
             return TargetCheck::new(
                 &target.name,
-                TargetState::NetworkError,
+                state,
                 installed,
                 None,
                 target.channel.to_string(),
                 Some(e.to_string()),
-            )
+            );
         }
     };
 
@@ -216,7 +312,14 @@ async fn check_one(
         }
     };
 
-    match crate::selection::select(target.channel, current, &pattern, expected, releases) {
+    match crate::selection::select(
+        &target.repository,
+        target.channel,
+        current,
+        &pattern,
+        expected,
+        releases,
+    ) {
         Some(update) => TargetCheck::new(
             &target.name,
             TargetState::UpdateAvailable,
@@ -233,5 +336,17 @@ async fn check_one(
             target.channel.to_string(),
             None,
         ),
+    }
+}
+
+/// Maps a source error onto the outcome state it represents.
+///
+/// A refusal is `Inaccessible`, everything else is a connectivity problem. The
+/// error is inspected by type rather than by matching its text, so a future
+/// rewording cannot silently move a refusal into the transport bucket.
+fn classify_source_error(error: &anyhow::Error) -> crate::TargetState {
+    match error.downcast_ref::<crate::github::SourceError>() {
+        Some(crate::github::SourceError::Inaccessible) => crate::TargetState::Inaccessible,
+        _ => crate::TargetState::NetworkError,
     }
 }

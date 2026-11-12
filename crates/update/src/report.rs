@@ -143,6 +143,12 @@ impl UpdateRun {
     }
 }
 
+/// The one wording the specification pins for an access problem.
+///
+/// Both the state's rendering and callers that add an actionable suffix build
+/// on this constant, so the phrase cannot drift in one place and not the other.
+pub const PHRASE: &str = "no access to update source";
+
 /// Renders one target's outcome as a single human-readable line.
 ///
 /// The phrase `no access to update source` is verbatim for [
@@ -164,10 +170,17 @@ pub fn render_check(check: &TargetCheck) -> String {
         }
         TargetState::NotInstalled => format!("{name}  not installed"),
         TargetState::Inaccessible => {
-            let mut line = format!("{name}  no access to update source");
+            // The pinned phrase leads; anything a caller added after it is the
+            // actionable part (a provisioning step, a named missing entry) and
+            // must be shown rather than swallowed.
+            let mut line = format!("{name}  {PHRASE}");
             if let Some(detail) = &check.detail {
-                if detail != "no access to update source" {
-                    line.push_str(&format!("\n  {detail}"));
+                let extra = detail
+                    .strip_prefix(PHRASE)
+                    .map(|rest| rest.trim_start_matches([':', ' ']))
+                    .unwrap_or(detail.as_str());
+                if !extra.is_empty() {
+                    line.push_str(&format!("\n  {extra}"));
                 }
             }
             line

@@ -50,7 +50,12 @@ pub fn is_allowed(channel: Channel, release: &Release, version: &Version) -> boo
 /// `asset_pattern` narrows the name search but cannot widen it beyond
 /// `expected_arch`, so an x64 installation never receives an arm64 archive no
 /// matter how the pattern is configured.
+///
+/// `repository` is needed because both the archive and its checksum resolve to
+/// the authenticated API endpoint: a private source answers 404 on the public
+/// download address, so selection must not produce one.
 pub fn select(
+    repository: &str,
     channel: Channel,
     current: &Version,
     asset_pattern: &str,
@@ -74,14 +79,14 @@ pub fn select(
                 .assets
                 .iter()
                 .find(|a| a.name.to_ascii_lowercase().contains("sha256"))
-                .map(|a| a.browser_download_url.clone());
+                .map(|a| crate::asset_endpoint(repository, a.id));
             Some(AvailableUpdate {
                 current: current.clone(),
                 version,
                 tag: release.tag_name,
                 channel,
                 asset_name: asset.name.clone(),
-                download_url: asset.browser_download_url.clone(),
+                download_url: crate::asset_endpoint(repository, asset.id),
                 checksum_url,
             })
         })
