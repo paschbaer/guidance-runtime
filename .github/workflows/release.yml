@@ -119,6 +119,16 @@ jobs:
             ./scripts/verify-arch.ps1 -Path $_.FullName -ExpectedTarget '${{ matrix.target }}'
           }
 
+      # The staging directory only had to survive Compress-Archive and the PE
+      # check; leaving it in dist/ uploads a folder next to the archive, which
+      # `gh release create dist/*` then tries to attach as an asset.
+      - name: Drop Staging Layout
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          Remove-Item -Recurse -Force "dist/guidance-runtime-$env:VERSION-${{ matrix.arch }}"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.arch }}
@@ -144,6 +154,15 @@ jobs:
           git fetch --tags --force
           git rev-parse "$TAG" >/dev/null 2>&1 && exit 1 || true
           gh release view "$TAG" >/dev/null 2>&1 && exit 1 || true
+      # Fail before tagging if no release assets arrived, so a broken build job
+      # cannot leave an empty, immutable tag behind.
+      - name: Assert Release Assets
+        run: |
+          ls dist/*.zip dist/*.txt >/dev/null 2>&1 || {
+            echo "no .zip/.txt assets in dist/ — refusing to publish" >&2
+            ls -la dist || true
+            exit 1
+          }
       - name: Create Tag
         env:
           TAG: ${{ needs.metadata.outputs.tag }}
@@ -156,9 +175,9 @@ jobs:
         if: needs.metadata.outputs.prerelease == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ needs.metadata.outputs.tag }}" dist/* --verify-tag --prerelease --generate-notes --latest=false --title "Guidance Runtime ${{ needs.metadata.outputs.version }} Beta"
+        run: gh release create "${{ needs.metadata.outputs.tag }}" dist/*.zip dist/*.txt --verify-tag --prerelease --generate-notes --latest=false --title "Guidance Runtime ${{ needs.metadata.outputs.version }} Beta"
       - name: Publish Stable
         if: needs.metadata.outputs.prerelease == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ needs.metadata.outputs.tag }}" dist/* --verify-tag --latest --generate-notes --title "Guidance Runtime ${{ needs.metadata.outputs.version }}"
+        run: gh release create "${{ needs.metadata.outputs.tag }}" dist/*.zip dist/*.txt --verify-tag --latest --generate-notes --title "Guidance Runtime ${{ needs.metadata.outputs.version }}"
