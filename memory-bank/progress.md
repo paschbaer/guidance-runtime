@@ -21,7 +21,7 @@ depend on input from the maintainers.
 - [x] Document the architecture in `systemPatterns.md`.
 - [x] Fix the SOLID review findings: IPC dispatch extraction (RW-001), typed `Method` enum,
       update ports behind `Releases`/`Downloader`/`Installer`, shared update commands.
-- [x] Raise workspace test coverage from 2 to 40 tests around the update pipeline and IPC mapping.
+- [x] Raise workspace test coverage from 2 to 55 tests around the update pipeline and IPC mapping.
 - [x] Track `Cargo.lock` (RW-002).
 
 ## In Progress
@@ -76,4 +76,10 @@ depend on input from the maintainers.
 - `guidance-update`: ports (`Releases`, `Downloader`, `Installer`) with HTTP/ZIP adapters (DIP);
   pure selection logic and checksum parsing are unit-tested; Beta channel rule is explicit.
 - CLI and updater share `set_or_get_channel`/`check_update` (DRY); install paths stay separate.
-- `Cargo.lock` tracked; workspace test count 2 → 40.
+- `Cargo.lock` tracked; workspace test count 2 → 55.
+
+### 2026-11-12 — Architecture-aware updates
+
+- Asset selection derives its suffix from the running architecture; an omitted `asset_pattern`
+  no longer defaults to x64. Unknown architectures and empty overrides fail loudly.
+- The configured pattern can narrow the search but never select another architecture's archive.

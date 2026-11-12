@@ -56,6 +56,6 @@ guidance update check
 guidance update install --yes
 ```
 
-The updater downloads the matching Windows x64 ZIP and SHA-256 asset, verifies the archive, stops `GuidanceRuntime`, backs up the installation, replaces the binaries, and restarts the service. It restores the backup if replacement or restart fails.
+The updater downloads the ZIP that matches the architecture it is running on (`windows-x64` or `windows-arm64`) together with the SHA-256 asset, verifies the archive, stops `GuidanceRuntime`, backs up the installation, replaces the binaries, and restarts the service. It restores the backup if replacement or restart fails. The architecture is derived automatically; set `asset_pattern` in `updates.toml` only to override it.
 
 The tray displays the currently configured update channel and provides **Check for updates**.

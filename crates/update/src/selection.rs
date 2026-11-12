@@ -1,8 +1,32 @@
 //! Pure release-selection logic: channel filtering, version selection and
 //! checksum parsing. No I/O lives here, so every rule is unit-testable.
 
+use crate::arch::KNOWN_ARCH_SUFFIXES;
 use crate::{AvailableUpdate, Channel, Release};
 use semver::Version;
+
+/// Decides whether an asset name belongs to the expected architecture.
+///
+/// `expected` is the architecture suffix this installation requires (for
+/// example `windows-x64.zip`); `pattern` is the name fragment the operator
+/// searches for. The pattern narrows the search and can never widen it, so no
+/// configuration can pull in another architecture's archive. A pattern looser
+/// than the expected suffix (for example `zip`) narrows nothing; it is
+/// accepted but has no effect.
+///
+/// Defence in depth, not a proof: the name must end with `expected` AND its
+/// known suffix (if any) must equal `expected`. Architectures outside
+/// `KNOWN_ARCH_SUFFIXES` are not covered — the table is hand-maintained and
+/// must grow with the release workflow.
+fn belongs_to_expected_arch(name: &str, pattern: &str, expected: &str) -> bool {
+    if !name.ends_with(pattern) || !name.ends_with(expected) {
+        return false;
+    }
+    let name_suffix = KNOWN_ARCH_SUFFIXES
+        .iter()
+        .find(|known| name.ends_with(*known));
+    matches!(name_suffix, Some(suffix) if *suffix == expected)
+}
 
 /// Decides whether a release is offered on the given channel.
 ///
@@ -21,11 +45,16 @@ pub fn is_allowed(channel: Channel, release: &Release, version: &Version) -> boo
 }
 
 /// Picks the highest version above `current` that is allowed on the channel
-/// and ships a matching asset.
+/// and ships an asset for `expected_arch`.
+///
+/// `asset_pattern` narrows the name search but cannot widen it beyond
+/// `expected_arch`, so an x64 installation never receives an arm64 archive no
+/// matter how the pattern is configured.
 pub fn select(
     channel: Channel,
     current: &Version,
-    repo_asset_pattern: &str,
+    asset_pattern: &str,
+    expected_arch: &str,
     releases: Vec<Release>,
 ) -> Option<AvailableUpdate> {
     let mut candidates: Vec<AvailableUpdate> = releases
@@ -40,7 +69,7 @@ pub fn select(
             let asset = release
                 .assets
                 .iter()
-                .find(|a| a.name.contains(repo_asset_pattern) && a.name.ends_with(".zip"))?;
+                .find(|a| belongs_to_expected_arch(&a.name, asset_pattern, expected_arch))?;
             let checksum_url = release
                 .assets
                 .iter()

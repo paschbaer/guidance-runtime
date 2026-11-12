@@ -142,7 +142,7 @@ mod tests {
             channel: crate::Channel::Stable,
             install_dir: PathBuf::from(r"C:\Program Files\Guidance Runtime"),
             service_name: "GuidanceRuntime".into(),
-            asset_pattern: "windows-x64.zip".into(),
+            asset_pattern: Some("windows-x64.zip".into()),
         }
     }
 

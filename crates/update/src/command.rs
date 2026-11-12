@@ -36,6 +36,10 @@ impl UpdateOutcome {
 
 /// Sets the channel on disk when `channel` is given, otherwise reports the
 /// currently configured one.
+///
+/// Rewrites the whole config file. `asset_pattern` is an `Option` and toml
+/// omits a `None`, so an explicit override survives only because it is loaded
+/// and saved again unchanged — there is no key-level merge.
 pub fn set_or_get_channel(config_path: &Path, channel: Option<Channel>) -> Result<String> {
     let mut cfg = UpdateConfig::load(config_path)?;
     if let Some(c) = channel {

@@ -43,11 +43,12 @@ update itself from GitHub Releases.
     refresh, exit)
   - Notable: uses `winit` 0.30 `ApplicationHandler` + `run_app`
 - **`guidance-update`** (library)
-  - Responsibility: release lookup, asset selection (`windows-x64.zip`), SHA-256 verification,
+  - Responsibility: release lookup, architecture-aware asset selection, SHA-256 verification,
     archive extraction, backup/replace/restart of the installation
-  - Structure: `lib.rs` (public API + composition root), `ports.rs` (`Releases`, `Downloader`,
-    `Installer` with boxed futures), `github.rs` (HTTP adapters), `install.rs` (ZIP/service
-    transaction), `selection.rs` (pure channel/version/checksum rules), `command.rs` (shared
+  - Structure: `lib.rs` (public API + composition root), `arch.rs` (architecture-to-suffix
+    mapping), `ports.rs` (`Releases`, `Downloader`, `Installer` with boxed futures), `github.rs`
+    (HTTP adapters), `install.rs` (ZIP/service transaction), `selection.rs` (pure
+    channel/version/checksum rules plus architecture-safe asset matching), `command.rs` (shared
     CLI/updater command bodies), `params.rs` (`sha256_hex`), `tests.rs` (port-driven tests)
   - Dependencies: `reqwest`, `sha2`, `zip`, `semver`, `toml`
 - **`guidance-updater`** (binary)
@@ -80,6 +81,16 @@ update itself from GitHub Releases.
 - **Implementation:** implement `Releases`, `Downloader` or `Installer` in a new adapter and wire
   it in `lib.rs` (the composition root). Tests use the same traits with fakes.
 - **Avoid when:** the change is pure selection logic — put that in `selection.rs` instead
+
+### Pattern: Architecture-aware asset selection
+
+- **Use when:** the release process publishes per-architecture artifacts
+- **Implementation:** `arch::asset_suffix_for_arch` maps `std::env::consts::ARCH` onto the asset
+  suffix; `selection::select` receives the expected suffix separately from the configured pattern,
+  so a pattern can narrow the search but never widen it beyond the running architecture. New
+  architectures need an entry in `KNOWN_ARCH_SUFFIXES` and the release workflow matrix.
+- **Avoid when:** only one architecture is ever published — but keep the mapping, since the
+  hardcoded default was the bug that made arm64 undeliverable
 
 ### Pattern: Transactional self-update
 
@@ -124,8 +135,9 @@ SHA-256 → verify → hand off to `guidance-updater` → install with backup/re
 
 ## Testing Strategy
 
-- Unit tests: 40 across the workspace — IPC error mapping and parameter parsing (13), protocol
-  method names (3), update selection/checksum/verification/install guard (23), runtime defaults (1)
+- Unit tests: 55 across the workspace — IPC error mapping and parameter parsing (13), protocol
+  method names (3), update architecture mapping/selection/checksum/verification/install guard
+  (38), runtime defaults (1)
 - Integration tests: none
 - End-to-end tests: none; build, clippy, and tests run in CI on Windows and Ubuntu
 - Manual checks: service install/uninstall via `scripts/install-dev.ps1` /

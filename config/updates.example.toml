@@ -3,4 +3,9 @@ repository = "YOUR-ORG/guidance-runtime"
 channel = "stable"
 install_dir = "C:/Program Files/Guidance Runtime"
 service_name = "GuidanceRuntime"
-asset_pattern = "windows-x64.zip"
+
+# Optional. The asset suffix the updater looks for.
+# Omit this key to derive it from the architecture the binary runs on
+# (x86_64 -> "windows-x64.zip", aarch64 -> "windows-arm64.zip").
+# Set it only to override that choice; an empty value is rejected.
+# asset_pattern = "windows-x64.zip"

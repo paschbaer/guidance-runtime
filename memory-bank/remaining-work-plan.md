@@ -86,6 +86,27 @@ For every tracked follow-up, include:
 - **Origin:** Session 2026-11-12 (plan review finding F2).
 - **Status:** Open
 
+### RW-007 — Architecture suffix table is hand-maintained
+
+- **Finding:** `KNOWN_ARCH_SUFFIXES` in `crates/update/src/arch.rs` must stay in sync with the
+  release workflow matrix by hand. A new architecture is invisible to the guard until it is added
+  to both places.
+- **Trigger point:** Whenever the release workflow gains or renames a target.
+- **Action:** Required at that point — add the suffix and a test; consider deriving the list from
+  a committed manifest that the workflow also reads.
+- **Origin:** Session 2026-11-12 (independent review of the arch-aware selection).
+- **Status:** Open
+
+### RW-008 — Non-Windows `update check` reports a Windows-looking suffix
+
+- **Finding:** On Linux the derived pattern is still `windows-*.zip`, so `guidance update check`
+  succeeds with a meaningless result before `install` refuses. Not a correctness risk, but a
+  confusing diagnostic.
+- **Trigger point:** The first time `guidance update check` is offered on a non-Windows host.
+- **Action:** Accepted observation — document if the CLI is ever shipped cross-platform.
+- **Origin:** Session 2026-11-12 (independent review of the arch-aware selection).
+- **Status:** Open
+
 ## Handled Follow-Ups
 
 ### RW-003 — Temporary debug steps in CI

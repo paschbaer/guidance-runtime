@@ -14,6 +14,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod arch;
 mod command;
 mod github;
 mod install;
@@ -23,6 +24,7 @@ mod selection;
 #[cfg(test)]
 mod tests;
 
+pub use arch::{asset_suffix_for_arch, running_arch, KNOWN_ARCH_SUFFIXES};
 pub use command::{check_update, current_version, set_or_get_channel, UpdateOutcome};
 pub use ports::{BoxFuture, Downloader, Installer, Releases};
 
@@ -68,8 +70,11 @@ pub struct UpdateConfig {
     pub install_dir: PathBuf,
     #[serde(default = "service_name")]
     pub service_name: String,
-    #[serde(default = "asset_pattern")]
-    pub asset_pattern: String,
+    /// Optional asset suffix override. When absent the suffix is derived from
+    /// the running architecture, so an installation never asks for another
+    /// architecture's archive by default.
+    #[serde(default)]
+    pub asset_pattern: Option<String>,
 }
 fn stable() -> Channel {
     Channel::Stable
@@ -80,10 +85,30 @@ fn install_dir() -> PathBuf {
 fn service_name() -> String {
     "GuidanceRuntime".into()
 }
-fn asset_pattern() -> String {
-    "windows-x64.zip".into()
-}
 impl UpdateConfig {
+    /// The asset suffix to look for: the explicit override when configured,
+    /// otherwise the suffix of the architecture this binary runs on.
+    ///
+    /// An explicitly configured but empty value is rejected rather than
+    /// treated as "unset": an empty suffix matches every archive, which is
+    /// exactly the architecture-blind behaviour this type avoids.
+    pub fn resolved_asset_pattern(&self) -> Result<String> {
+        let Some(raw) = self.asset_pattern.as_deref() else {
+            return Ok(arch::asset_suffix_for_arch(arch::running_arch())?.to_string());
+        };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            bail!(
+                "asset_pattern is set but blank; omit it to derive the pattern from the running \
+                 architecture"
+            );
+        }
+        if !trimmed.ends_with(".zip") {
+            bail!("asset_pattern must end with .zip, got '{trimmed}'");
+        }
+        Ok(trimmed.to_string())
+    }
+
     pub fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         Ok(toml::from_str(&text)?)
@@ -132,10 +157,13 @@ pub async fn check_with(
     current: &Version,
 ) -> Result<Option<AvailableUpdate>> {
     let releases = source.list(&config.repository).await?;
+    let pattern = config.resolved_asset_pattern()?;
+    let expected = arch::asset_suffix_for_arch(arch::running_arch())?;
     Ok(selection::select(
         config.channel,
         current,
-        &config.asset_pattern,
+        &pattern,
+        expected,
         releases,
     ))
 }

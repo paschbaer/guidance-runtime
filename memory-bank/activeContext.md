@@ -19,11 +19,18 @@ replace the Memory Bank template placeholders with repository-specific content.
 - [x] Register the repository in the Guidance workspace registry.
 - [x] Resolve the SOLID review findings (RW-001 plus OCP/DIP/DRY) on `feature/solid-findings-fix`.
 - [x] Decide `Cargo.lock` tracking — tracked since `b9f817d` (RW-002 Handled).
+- [x] Make update asset selection architecture-aware so arm64 installations can update.
 - [ ] Complete `projectBrief.md` — blocked on owner and primary-user input.
 - [ ] Complete `productContext.md` — user journeys need product input.
 
 ## Recent Changes
 
+- `crates/update/src/arch.rs`: architecture-to-suffix mapping (`x86_64` → `windows-x64.zip`,
+  `aarch64` → `windows-arm64.zip`); unknown architectures error instead of falling back to x64.
+- `crates/update/src/lib.rs`: `UpdateConfig.asset_pattern` is now `Option<String>`; an omitted key
+  derives from the running architecture, an explicitly empty value is rejected.
+- `crates/update/src/selection.rs`: asset matching is suffix-based and architecture-guarded; the
+  configured pattern can narrow the search but never widen it to another architecture.
 - `crates/protocol/src/lib.rs`: added the typed `Method` enum (`as_str`, `FromStr`, `ALL`) as the
   single source of IPC method names, pinned by tests.
 - `crates/ipc/src/`: split into `lib.rs` (transport), `dispatch.rs` (one handler per method),
@@ -69,4 +76,4 @@ replace the Memory Bank template placeholders with repository-specific content.
 
 ## Last Updated
 
-2026-11-12 (agent session: SOLID review fixes — IPC dispatch, Method enum, update ports, DRY)
+2026-11-12 (agent session: architecture-aware asset selection)
