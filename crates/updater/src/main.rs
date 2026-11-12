@@ -77,7 +77,7 @@ fn wait_for_exit(pid: u32, timeout: Duration) -> Result<()> {
     #[cfg(not(windows))]
     {
         let _ = (pid, timeout);
-        return Ok(());
+        Ok(());
     }
     #[cfg(windows)]
     {

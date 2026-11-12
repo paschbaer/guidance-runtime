@@ -204,7 +204,7 @@ pub fn install_archive(config: &UpdateConfig, bytes: &[u8]) -> Result<()> {
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
         for i in 0..archive.len() {
             let mut file = archive.by_index(i)?;
-            let Some(rel) = file.enclosed_name().map(Path::to_path_buf) else {
+            let Some(rel) = file.enclosed_name() else {
                 bail!("unsafe archive path")
             };
             let out = staging.path().join(rel);
@@ -215,7 +215,7 @@ pub fn install_archive(config: &UpdateConfig, bytes: &[u8]) -> Result<()> {
                     fs::create_dir_all(p)?
                 }
                 let mut target = fs::File::create(&out)?;
-                std::io::copy(&mut file, &mut target)?
+                std::io::copy(&mut file, &mut target)?;
             }
         }
         let source = find_bin_dir(staging.path())?;

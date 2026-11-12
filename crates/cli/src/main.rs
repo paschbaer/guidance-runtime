@@ -123,7 +123,10 @@ async fn update(command: UpdateCommand) -> Result<()> {
                 bail!("installation requires --yes")
             }
             #[cfg(not(windows))]
-            bail!("installation is supported on Windows only");
+            {
+                let _ = config;
+                bail!("installation is supported on Windows only");
+            }
             #[cfg(windows)]
             {
                 let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
