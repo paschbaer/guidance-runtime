@@ -187,7 +187,7 @@ byte-identical behaviour to the pre-change build.
 
 - [ ] T011 [US1] Implement `check_all` fan-out in `crates/update/src/command.rs`: iterate targets in configuration order, isolate each with its own `Result`, and always produce one `TargetCheck` per configured target (FR-008)
 - [ ] T012 [US1] Implement exit-status derivation in `crates/update/src/command.rs`: `0` all clean, `1` configuration/usage error, `2` at least one target failed, per [contracts/update-cli.md](./contracts/update-cli.md) §2
-- [ ] T013 [P] [US1] Add fan-out and exit-status tests in `crates/update/src/tests.rs` using `FixedReleases`: two targets both checked; first target failing still yields the second's real state; `n` targets yield `n` checks; exit `0` for an all-clean run, `1` for a configuration error and `2` for a partial failure (FR-026)
+- [ ] T013 [P] [US1] Add fan-out and exit-status tests in `crates/update/src/tests.rs` using `FixedReleases`: two targets both checked; first target failing still yields the second's real state; `n` targets yield `n` checks; exit `0` for an all-clean run, `1` for a configuration error and `2` for a partial failure (FR-026, SC-002)
 - [ ] T014 [US1] Add legacy-compatibility test in `crates/update/src/tests.rs`: a flat single-target file produces the same outcome as the pre-feature call path (SC-001)
 - [ ] T015 [US1] Update the CLI in `crates/cli/src/main.rs` so `guidance update check` calls the fan-out and renders one line per target, and `guidance update channel` without `--target` refuses a multi-target configuration by naming the targets
 
@@ -268,7 +268,7 @@ installs nothing; a public target succeeds with no token consulted at all.
 - [ ] T019 [US2] Extend `Asset` in `crates/update/src/lib.rs` with `id`, and add an authenticated asset-reference type so the archive and its checksum are fetched through `repos/{repo}/releases/assets/{id}` with `Accept: application/octet-stream` (R1, FR-017)
 - [ ] T020 [US2] Rework `crates/update/src/github.rs`: send `Authorization: Bearer` only when a token was supplied, use the asset endpoint for bytes, and map `401`/`403`/`404` to one indistinguishable `inaccessible` outcome (FR-013, FR-014)
 - [ ] T021 [P] [US2] Update `crates/update/src/selection.rs` so archive and checksum resolve to the same authenticated reference, and add tests asserting both use it and that no `browser_download_url` is used for a private target
-- [ ] T022 [US2] Wire credential resolution into the check path in `crates/update/src/command.rs`: private targets resolve the entry named by configuration, public targets never call the store
+- [ ] T022 [US2] Wire credential resolution into the check path in `crates/update/src/command.rs`: private targets resolve the entry named by configuration, public targets never call the store (SC-008)
 
 **taskmeta** (T016)
 
@@ -361,8 +361,8 @@ artifact, from the output alone.
 every state is distinguishable in human and JSON output, and that the access report is identical for
 an unauthorized identity and a non-existent repository.
 
-- [ ] T023 [US3] Render the human-readable summary in `crates/update/src/report.rs`: one line per target, target name first, with the verbatim phrase `no access to update source` for `inaccessible` and a provisioning hint on a second line for an absent credential entry
-- [ ] T024 [US3] Render the JSON document in `crates/update/src/report.rs` with `spec_version`, `checked_at`, `exit_status` and `targets[]`, serializing `state` as lowercase snake_case per [contracts/update-cli.md](./contracts/update-cli.md) §4
+- [ ] T023 [US3] Render the human-readable summary in `crates/update/src/report.rs`: one line per target, target name first, with the verbatim phrase `no access to update source` for `inaccessible` and a provisioning hint on a second line for an absent credential entry (SC-003)
+- [ ] T024 [US3] Render the JSON document in `crates/update/src/report.rs` with `spec_version`, `checked_at`, `exit_status` and `targets[]`, serializing `state` as lowercase snake_case per [contracts/update-cli.md](./contracts/update-cli.md) §4 (SC-010)
 - [ ] T025 [P] [US3] Add rendering tests in `crates/update/src/tests.rs`: all seven states produce distinct output; `network_error` and `invalid_artifact` never reuse the access phrase; the unauthorized and non-existent reports are identical (SC-005)
 - [ ] T026 [US3] Add a secret-leak test in `crates/update/src/tests.rs` that runs every rendering path with a sentinel token value and asserts zero occurrences in text, JSON and error messages (NFR-4, SC-007)
 - [ ] T027 [US3] Add `--format text|json` to the check command in `crates/updater/src/main.rs` and `crates/cli/src/main.rs`, defaulting to `text`
@@ -442,7 +442,7 @@ checksum mismatch and confirm the old version survives.
 - [ ] T031 [US4] Refactor `crates/update/src/install.rs` into a shared transactional body taking a file set, an install directory and an optional service name; preserve stop → backup → replace → restart → restore-on-failure exactly for the runtime target, and skip service control when the name is absent (FR-020a, FR-021)
 - [ ] T032 [P] [US4] Extend the existing install tests in `crates/update/src/install.rs` and `crates/update/src/tests.rs`: unsafe archive path still rejected, malformed archive still rejected, checksum mismatch leaves the install dir byte-identical and the marker unchanged, service-less target never invokes `sc.exe`
 - [ ] T033 [US4] Write the version marker as the final step of a successful install in `crates/update/src/install.rs`, so a failure after replacement cannot claim the new version (FR-020b)
-- [ ] T034 [US4] Add per-target install orchestration in `crates/update/src/command.rs`: `--target` narrows to one, omission applies every target reporting `update_available`, and `--yes` remains mandatory (FR-020)
+- [ ] T034 [US4] Add per-target install orchestration in `crates/update/src/command.rs`: `--target` narrows to one, omission applies every target reporting `update_available`, and `--yes` remains mandatory (FR-020, SC-004, SC-006)
 
 **taskmeta** (T028)
 
