@@ -1,13 +1,32 @@
+//! Update support: release lookup, download, checksum verification and the
+//! transactional installation of a new build.
+//!
+//! The I/O-heavy parts live behind the ports in [`ports`]; concrete adapters
+//! are in [`github`] and [`install`]. The public free functions below are the
+//! composition root: they wire the default adapters so existing call sites
+//! keep working unchanged.
+
 use anyhow::{bail, Context, Result};
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-#[cfg(windows)]
-use std::{io::Cursor, process::Command};
+
+mod command;
+mod github;
+mod install;
+mod params;
+mod ports;
+mod selection;
+#[cfg(test)]
+mod tests;
+
+pub use command::{check_update, current_version, set_or_get_channel, UpdateOutcome};
+pub use ports::{BoxFuture, Downloader, Installer, Releases};
+
+pub use selection::{is_allowed, parse_checksum, select};
 
 pub const DEFAULT_CONFIG: &str = r"C:\ProgramData\Guidance Runtime\config\updates.toml";
 
@@ -79,18 +98,18 @@ impl UpdateConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct Release {
-    tag_name: String,
-    prerelease: bool,
-    draft: bool,
-    assets: Vec<Asset>,
+pub struct Release {
+    pub tag_name: String,
+    pub prerelease: bool,
+    pub draft: bool,
+    pub assets: Vec<Asset>,
 }
 #[derive(Debug, Clone, Deserialize)]
-struct Asset {
-    name: String,
-    browser_download_url: String,
+pub struct Asset {
+    pub name: String,
+    pub browser_download_url: String,
 }
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct AvailableUpdate {
     pub current: Version,
     pub version: Version,
@@ -100,213 +119,53 @@ pub struct AvailableUpdate {
     pub download_url: String,
     pub checksum_url: Option<String>,
 }
-
+/// Looks up the newest update offered on the configured channel.
 pub async fn check(config: &UpdateConfig, current: &Version) -> Result<Option<AvailableUpdate>> {
-    let url = format!(
-        "https://api.github.com/repos/{}/releases?per_page=100",
-        config.repository
-    );
-    let releases = reqwest::Client::new()
-        .get(url)
-        .header("User-Agent", "guidance-runtime-updater")
-        .send()
-        .await?
-        .error_for_status()?
-        .json::<Vec<Release>>()
-        .await?;
-    let mut candidates = Vec::new();
-    for release in releases.into_iter().filter(|r| !r.draft) {
-        let raw = release.tag_name.trim_start_matches('v');
-        let Ok(version) = Version::parse(raw) else {
-            continue;
-        };
-        let allowed = match config.channel {
-            Channel::Stable => !release.prerelease && version.pre.is_empty(),
-            Channel::Beta => {
-                !version.pre.is_empty() && version.pre.as_str().starts_with("beta.")
-                    || !release.prerelease && version.pre.is_empty()
-            }
-        };
-        if !allowed || version <= *current {
-            continue;
-        }
-        if let Some(asset) = release
-            .assets
-            .iter()
-            .find(|a| a.name.contains(&config.asset_pattern) && a.name.ends_with(".zip"))
-        {
-            let checksum = release
-                .assets
-                .iter()
-                .find(|a| a.name.to_ascii_lowercase().contains("sha256"))
-                .map(|a| a.browser_download_url.clone());
-            candidates.push(AvailableUpdate {
-                current: current.clone(),
-                version,
-                tag: release.tag_name,
-                channel: config.channel,
-                asset_name: asset.name.clone(),
-                download_url: asset.browser_download_url.clone(),
-                checksum_url: checksum,
-            });
-        }
-    }
-    candidates.sort_by(|a, b| b.version.cmp(&a.version));
-    Ok(candidates.into_iter().next())
+    let source = github::GitHubReleases::new();
+    check_with(&source, config, current).await
 }
 
+/// Channel-aware release lookup against an arbitrary [`Releases`] port.
+pub async fn check_with(
+    source: &dyn Releases,
+    config: &UpdateConfig,
+    current: &Version,
+) -> Result<Option<AvailableUpdate>> {
+    let releases = source.list(&config.repository).await?;
+    Ok(selection::select(
+        config.channel,
+        current,
+        &config.asset_pattern,
+        releases,
+    ))
+}
+
+/// Downloads the update asset and verifies it against the release checksum.
 pub async fn download_and_verify(update: &AvailableUpdate) -> Result<Vec<u8>> {
-    let client = reqwest::Client::new();
-    let bytes = client
-        .get(&update.download_url)
-        .header("User-Agent", "guidance-runtime-updater")
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?
-        .to_vec();
-    if let Some(url) = &update.checksum_url {
-        let text = client
-            .get(url)
-            .header("User-Agent", "guidance-runtime-updater")
-            .send()
-            .await?
-            .error_for_status()?
-            .text()
-            .await?;
-        let expected = text
-            .lines()
-            .find(|line| line.contains(&update.asset_name))
-            .or_else(|| text.lines().next())
-            .and_then(|line| line.split_whitespace().next())
-            .context("empty checksum file")?
-            .to_ascii_lowercase();
-        let actual = format!("{:x}", Sha256::digest(&bytes));
-        if actual != expected {
-            bail!("SHA-256 mismatch: expected {expected}, got {actual}")
-        }
-    } else {
+    let downloader = github::HttpDownloader::new();
+    download_and_verify_with(&downloader, update).await
+}
+
+/// Checksum-verified download against an arbitrary [`Downloader`] port.
+pub async fn download_and_verify_with(
+    downloader: &dyn Downloader,
+    update: &AvailableUpdate,
+) -> Result<Vec<u8>> {
+    let bytes = downloader.get(&update.download_url).await?;
+    let Some(url) = &update.checksum_url else {
         bail!("release has no SHA-256 asset; refusing update")
+    };
+    let text = String::from_utf8_lossy(&downloader.get(url).await?).into_owned();
+    let expected =
+        selection::parse_checksum(&text, &update.asset_name).context("empty checksum file")?;
+    let actual = params::sha256_hex(&bytes);
+    if actual != expected {
+        bail!("SHA-256 mismatch: expected {expected}, got {actual}")
     }
     Ok(bytes)
 }
 
+/// Installs a downloaded archive with the default installer.
 pub fn install_archive(config: &UpdateConfig, bytes: &[u8]) -> Result<()> {
-    #[cfg(not(windows))]
-    {
-        let _ = (config, bytes);
-        bail!("installation is supported on Windows only")
-    }
-    #[cfg(windows)]
-    {
-        let staging = tempfile::tempdir()?;
-        let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
-        for i in 0..archive.len() {
-            let mut file = archive.by_index(i)?;
-            let Some(rel) = file.enclosed_name() else {
-                bail!("unsafe archive path")
-            };
-            let out = staging.path().join(rel);
-            if file.is_dir() {
-                fs::create_dir_all(&out)?
-            } else {
-                if let Some(p) = out.parent() {
-                    fs::create_dir_all(p)?
-                }
-                let mut target = fs::File::create(&out)?;
-                std::io::copy(&mut file, &mut target)?;
-            }
-        }
-        let source = find_bin_dir(staging.path())?;
-        let backup = config.install_dir.with_extension("backup");
-        run_sc("stop", &config.service_name)?;
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        let operation = (|| -> Result<()> {
-            if backup.exists() {
-                fs::remove_dir_all(&backup)?
-            }
-            if config.install_dir.exists() {
-                copy_dir(&config.install_dir, &backup)?
-            }
-            fs::create_dir_all(&config.install_dir)?;
-            for name in [
-                "guidance-service.exe",
-                "guidance.exe",
-                "guidance-tray.exe",
-                "guidance-updater.exe",
-            ] {
-                let src = source.join(name);
-                if src.exists() {
-                    fs::copy(src, config.install_dir.join(name))?;
-                }
-            }
-            Ok(())
-        })();
-        if let Err(e) = operation {
-            if backup.exists() {
-                let _ = copy_dir(&backup, &config.install_dir);
-            }
-            let _ = run_sc("start", &config.service_name);
-            return Err(e);
-        }
-        if let Err(e) = run_sc("start", &config.service_name) {
-            let _ = copy_dir(&backup, &config.install_dir);
-            let _ = run_sc("start", &config.service_name);
-            return Err(e);
-        }
-        Ok(())
-    }
-}
-#[cfg(windows)]
-fn run_sc(action: &str, service: &str) -> Result<()> {
-    let s = Command::new("sc.exe").args([action, service]).status()?;
-    if !s.success() {
-        bail!("sc.exe {action} failed: {s}")
-    }
-    Ok(())
-}
-#[cfg(windows)]
-fn find_bin_dir(root: &Path) -> Result<PathBuf> {
-    for p in walk(root)? {
-        if p.join("guidance-service.exe").exists() {
-            return Ok(p);
-        }
-    }
-    bail!("archive does not contain guidance-service.exe")
-}
-#[cfg(windows)]
-fn walk(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut out = vec![root.to_path_buf()];
-    for e in fs::read_dir(root)? {
-        let p = e?.path();
-        if p.is_dir() {
-            out.extend(walk(&p)?);
-        }
-    }
-    Ok(out)
-}
-#[cfg(windows)]
-fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst)?;
-    for e in fs::read_dir(src)? {
-        let e = e?;
-        let to = dst.join(e.file_name());
-        if e.path().is_dir() {
-            copy_dir(&e.path(), &to)?
-        } else {
-            fs::copy(e.path(), to)?;
-        }
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn channel_parse() {
-        assert_eq!("stable".parse::<Channel>().unwrap(), Channel::Stable);
-        assert!("nightly".parse::<Channel>().is_err());
-    }
+    install::ZipInstaller.install(config, bytes)
 }

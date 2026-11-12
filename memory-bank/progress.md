@@ -19,6 +19,10 @@ depend on input from the maintainers.
 - [x] Register the repository in the Guidance workspace registry as `guidance-runtime`.
 - [x] Document the actual toolchain and commands in `techContext.md`.
 - [x] Document the architecture in `systemPatterns.md`.
+- [x] Fix the SOLID review findings: IPC dispatch extraction (RW-001), typed `Method` enum,
+      update ports behind `Releases`/`Downloader`/`Installer`, shared update commands.
+- [x] Raise workspace test coverage from 2 to 40 tests around the update pipeline and IPC mapping.
+- [x] Track `Cargo.lock` (RW-002).
 
 ## In Progress
 
@@ -28,17 +32,15 @@ depend on input from the maintainers.
 ## Planned
 
 - [ ] Define the first milestone and acceptance criteria.
-- [ ] Add focused tests for `guidance-update` (checksum verification, archive extraction,
-      backup/restore).
+- [ ] Add a service-control port so the backup/restore transaction becomes testable (RW-005).
 - [ ] Record initial architectural decisions as ADRs.
 - [ ] Validate the development environment end to end (install/uninstall via `scripts/*.ps1`).
 
 ## Known Issues
 
 - `projectBrief.md` and `productContext.md` still contain template placeholders.
-- `Cargo.lock` exists locally but is gitignored and untracked (decision pending, RW-002).
-- `.github/workflows/ci.yml` carries temporary debug steps (RW-003).
-- Test coverage is minimal: 2 tests across the whole workspace.
+- The Windows backup/restore transaction is still untested (RW-005).
+- IPC handlers have no direct test seam until a supervisor port exists (RW-006).
 
 ## Milestones
 
@@ -63,7 +65,15 @@ depend on input from the maintainers.
 ### 2026-11-12 — Build and Guidance setup
 
 - Repaired the workspace build for `-D warnings` (three defects, two of them Windows-only).
-- Stopped tracking `Cargo.lock`; added it to `.gitignore`.
 - Created and verified the `.guidance/` configuration; registered the workspace.
 - Replaced the template placeholders in `techContext.md`, `systemPatterns.md`,
   `activeContext.md`, `progress.md`, `remaining-work-plan.md`, and `lessonsLearned.md`.
+
+### 2026-11-12 — SOLID review fixes
+
+- `guidance-protocol`: typed `Method` enum replaces scattered method string literals (OCP).
+- `guidance-ipc`: dispatch split into named handlers with a typed `DispatchError` (SRP).
+- `guidance-update`: ports (`Releases`, `Downloader`, `Installer`) with HTTP/ZIP adapters (DIP);
+  pure selection logic and checksum parsing are unit-tested; Beta channel rule is explicit.
+- CLI and updater share `set_or_get_channel`/`check_update` (DRY); install paths stay separate.
+- `Cargo.lock` tracked; workspace test count 2 → 40.

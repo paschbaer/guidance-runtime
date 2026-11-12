@@ -32,23 +32,21 @@ enum Cmd {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let mut cfg = UpdateConfig::load(&cli.config)?;
+    let cfg = UpdateConfig::load(&cli.config)?;
     match cli.command {
-        Cmd::Channel { channel: None } => println!("{}", cfg.channel),
-        Cmd::Channel { channel: Some(c) } => {
-            cfg.channel = c;
-            cfg.save(&cli.config)?;
-            println!("Update channel set to {c}")
+        Cmd::Channel { channel } => {
+            println!(
+                "{}",
+                guidance_update::set_or_get_channel(&cli.config, channel)?
+            )
         }
         Cmd::Check { current } => {
-            let v = current.unwrap_or_else(|| Version::parse(env!("CARGO_PKG_VERSION")).unwrap());
-            match guidance_update::check(&cfg, &v).await? {
-                Some(u) => println!(
-                    "Update available: {} -> {} ({})",
-                    u.current, u.version, u.channel
-                ),
-                None => println!("No update available on {} channel", cfg.channel),
-            }
+            let v = match current {
+                Some(v) => v,
+                None => guidance_update::current_version()?,
+            };
+            let outcome = guidance_update::check_update(&cfg, &v).await?;
+            println!("{}", outcome.message())
         }
         Cmd::Install {
             current,
@@ -61,7 +59,10 @@ async fn main() -> Result<()> {
             if let Some(pid) = wait_pid {
                 wait_for_exit(pid, Duration::from_secs(60))?
             }
-            let v = current.unwrap_or_else(|| Version::parse(env!("CARGO_PKG_VERSION")).unwrap());
+            let v = match current {
+                Some(v) => v,
+                None => guidance_update::current_version()?,
+            };
             let u = guidance_update::check(&cfg, &v)
                 .await?
                 .context("no update available")?;

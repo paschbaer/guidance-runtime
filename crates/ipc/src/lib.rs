@@ -1,32 +1,15 @@
-use anyhow::{Context, Result};
-use guidance_protocol::{Request, Response, VERSION};
+use anyhow::Result;
+use guidance_protocol::{Request, Response};
 use guidance_runtime::Runtime;
-use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-async fn run(rt: &Runtime, q: Request) -> Response {
-    let id = q.id.clone();
-    if q.protocol != VERSION {
-        return Response::err(id, "unsupported_protocol", "expected 1.0".into());
-    }
-    let r:Result<Value>=async{Ok(match q.method.as_str(){"runtime.status"=>json!({"version":env!("CARGO_PKG_VERSION"),"state":"Running","workloads":rt.list()}),"workload.list"=>json!(rt.list()),"workload.start"=>{rt.start(pid(&q.params)?).await?;json!({"accepted":true})},"workload.stop"=>{rt.stop(pid(&q.params)?).await?;json!({"accepted":true})},"workload.restart"=>{rt.restart(pid(&q.params)?).await?;json!({"accepted":true})},"workload.stop_all"=>{rt.stop_all().await;json!({"accepted":true})},"workload.start_all"=>{rt.start_enabled().await;json!({"accepted":true})},"workload.logs"=>json!({"lines":rt.logs(pid(&q.params)?,q.params.get("tail").and_then(Value::as_u64).unwrap_or(100)as usize).await?}),"diagnostics.summary"=>json!({"workloads":rt.list()}),_=>anyhow::bail!("method not found")})}.await;
-    match r {
-        Ok(x) => Response::ok(id, x),
-        Err(e) => Response::err(
-            id,
-            if e.to_string().contains("not found") {
-                "not_found"
-            } else {
-                "internal_error"
-            },
-            e.to_string(),
-        ),
-    }
-}
-fn pid(v: &Value) -> Result<&str> {
-    v.get("workload_id")
-        .and_then(Value::as_str)
-        .context("workload_id required")
-}
+
+mod dispatch;
+mod error;
+mod params;
+
+/// Maximum accepted line length of an inbound request.
+const MAX_LINE: usize = 1_048_576;
+
 async fn stream<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     s: S,
     rt: Runtime,
@@ -34,11 +17,11 @@ async fn stream<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     let (r, mut w) = tokio::io::split(s);
     let mut l = BufReader::new(r).lines();
     while let Some(x) = l.next_line().await? {
-        if x.len() > 1_048_576 {
+        if x.len() > MAX_LINE {
             break;
         }
         let z = match serde_json::from_str(&x) {
-            Ok(q) => run(&rt, q).await,
+            Ok(q) => dispatch::run(&rt, q).await,
             Err(e) => Response::err("unknown".into(), "invalid_request", e.to_string()),
         };
         w.write_all(serde_json::to_string(&z)?.as_bytes()).await?;

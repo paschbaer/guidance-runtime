@@ -2,9 +2,8 @@
 use anyhow::Context;
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
-use guidance_protocol::Request;
+use guidance_protocol::{Method, Request};
 use guidance_update::{Channel, UpdateConfig};
-use semver::Version;
 use serde_json::json;
 use std::path::PathBuf;
 #[cfg(windows)]
@@ -70,18 +69,22 @@ async fn main() -> Result<()> {
         other => other,
     };
     let (method, params) = match command {
-        Command::Status => ("runtime.status", json!({})),
-        Command::List => ("workload.list", json!({})),
-        Command::Start { id } => ("workload.start", json!({"workload_id":id})),
-        Command::Stop { id } => ("workload.stop", json!({"workload_id":id})),
-        Command::Restart { id } => ("workload.restart", json!({"workload_id":id})),
-        Command::Logs { id, tail } => ("workload.logs", json!({"workload_id":id,"tail":tail})),
-        Command::StartAll => ("workload.start_all", json!({})),
-        Command::StopAll => ("workload.stop_all", json!({})),
-        Command::Doctor => ("diagnostics.summary", json!({})),
-        Command::Update { .. } => unreachable!(),
+        Command::Status => (Method::RuntimeStatus, json!({})),
+        Command::List => (Method::WorkloadList, json!({})),
+        Command::Start { id } => (Method::WorkloadStart, json!({ "workload_id": id })),
+        Command::Stop { id } => (Method::WorkloadStop, json!({ "workload_id": id })),
+        Command::Restart { id } => (Method::WorkloadRestart, json!({ "workload_id": id })),
+        Command::Logs { id, tail } => (
+            Method::WorkloadLogs,
+            json!({ "workload_id": id, "tail": tail }),
+        ),
+        Command::StartAll => (Method::WorkloadStartAll, json!({})),
+        Command::StopAll => (Method::WorkloadStopAll, json!({})),
+        Command::Doctor => (Method::DiagnosticsSummary, json!({})),
+        // Dispatched above via the early return for `Command::Update`.
+        Command::Update { .. } => unreachable!("update commands are handled before IPC dispatch"),
     };
-    let response = guidance_ipc::request(Request::new(method, params)).await?;
+    let response = guidance_ipc::request(Request::new(method.as_str(), params)).await?;
     if let Some(error) = response.error {
         bail!("{}: {}", error.code, error.message)
     }
@@ -98,25 +101,13 @@ async fn main() -> Result<()> {
 async fn update(command: UpdateCommand) -> Result<()> {
     match command {
         UpdateCommand::Channel { channel, config } => {
-            let mut cfg = UpdateConfig::load(&config)?;
-            if let Some(c) = channel {
-                cfg.channel = c;
-                cfg.save(&config)?;
-                println!("Update channel set to {c}")
-            } else {
-                println!("{}", cfg.channel)
-            }
+            println!("{}", guidance_update::set_or_get_channel(&config, channel)?)
         }
         UpdateCommand::Check { config } => {
             let cfg = UpdateConfig::load(&config)?;
-            let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
-            match guidance_update::check(&cfg, &current).await? {
-                Some(u) => println!(
-                    "Update available: {} -> {} ({})",
-                    u.current, u.version, u.channel
-                ),
-                None => println!("No update available on {} channel", cfg.channel),
-            }
+            let current = guidance_update::current_version()?;
+            let outcome = guidance_update::check_update(&cfg, &current).await?;
+            println!("{}", outcome.message())
         }
         UpdateCommand::Install { config, yes } => {
             if !yes {
@@ -129,7 +120,7 @@ async fn update(command: UpdateCommand) -> Result<()> {
             }
             #[cfg(windows)]
             {
-                let current = Version::parse(env!("CARGO_PKG_VERSION"))?;
+                let current = guidance_update::current_version()?;
                 let source = std::env::current_exe()?.with_file_name("guidance-updater.exe");
                 let temp = std::env::temp_dir()
                     .join(format!("guidance-updater-{}.exe", std::process::id()));

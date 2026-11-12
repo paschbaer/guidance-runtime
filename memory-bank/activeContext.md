@@ -17,20 +17,31 @@ replace the Memory Bank template placeholders with repository-specific content.
 - [x] Fix the release build for `-D warnings` (zip 2 API, winit `ApplicationHandler`, CLI binding).
 - [x] Create and verify the `.guidance/` configuration (template `rust`, 23 files).
 - [x] Register the repository in the Guidance workspace registry.
+- [x] Resolve the SOLID review findings (RW-001 plus OCP/DIP/DRY) on `feature/solid-findings-fix`.
+- [x] Decide `Cargo.lock` tracking — tracked since `b9f817d` (RW-002 Handled).
 - [ ] Complete `projectBrief.md` — blocked on owner and primary-user input.
 - [ ] Complete `productContext.md` — user journeys need product input.
-- [ ] Decide whether `Cargo.lock` should stay untracked (see RW-002).
 
 ## Recent Changes
 
+- `crates/protocol/src/lib.rs`: added the typed `Method` enum (`as_str`, `FromStr`, `ALL`) as the
+  single source of IPC method names, pinned by tests.
+- `crates/ipc/src/`: split into `lib.rs` (transport), `dispatch.rs` (one handler per method),
+  `error.rs` (typed `DispatchError` with exhaustive wire codes) and `params.rs`.
+- `crates/update/src/`: split into `lib.rs` (composition root + public API), `ports.rs`,
+  `github.rs`, `install.rs`, `selection.rs`, `command.rs`, `params.rs`, `tests.rs`. The update
+  pipeline now runs against the `Releases`/`Downloader`/`Installer` ports; the Windows install
+  body is unchanged.
+- `crates/cli/src/main.rs`, `crates/updater/src/main.rs`: use the shared
+  `set_or_get_channel`/`check_update` command bodies and the `Method` enum.
+- `crates/tray/src/main.rs`: uses the `Method` enum.
 - `crates/update/src/lib.rs`: adapted archive extraction to `zip` 2.6.1
   (`enclosed_name()` returns `PathBuf`; added a missing statement terminator).
 - `crates/tray/src/main.rs`: migrated from deprecated `EventLoop::run` to
   `ApplicationHandler::run_app`.
 - `crates/cli/src/main.rs`: fixed the `UpdateCommand::Install` binding that broke the Windows build.
 - `.guidance/`: full generated configuration, verified with `setup_guidance_verify` (23/23).
-- `.github/workflows/ci.yml`: temporarily adds two debug steps that dump `ci.yml` and
-  `release.yml` (see RW-003).
+- `.github/workflows/ci.yml`: the temporary debug steps were removed (RW-003).
 
 ## Recent Decisions
 
@@ -43,7 +54,6 @@ replace the Memory Bank template placeholders with repository-specific content.
 
 - [ ] Who is the project owner (person or team) for `projectBrief.md`?
 - [ ] Who are the primary users — workstation operators, or a wider developer audience?
-- [ ] Is the untracked `Cargo.lock` intentional for this binary workspace?
 
 ## Blockers
 
@@ -52,10 +62,11 @@ replace the Memory Bank template placeholders with repository-specific content.
 ## Next Actions
 
 1. Answer the open questions above, then fill `projectBrief.md` and `productContext.md`.
-2. Remove or keep the debug steps in `.github/workflows/ci.yml` (RW-003).
-3. Restart the Guidance server so the new `.guidance/` configuration is snapshotted.
-4. Consider the first focused tests for `guidance-update` (see `systemPatterns.md` risks).
+2. Restart the Guidance server so the new `.guidance/` configuration is snapshotted.
+3. Address RW-004/RW-005: add a service-control port so the backup/restore transaction becomes
+   testable.
+4. Consider RW-006 (handler test seam via a supervisor trait) when the next handler change lands.
 
 ## Last Updated
 
-2026-11-12 (agent session: clippy fixes, Guidance setup, Memory Bank initialization)
+2026-11-12 (agent session: SOLID review fixes — IPC dispatch, Method enum, update ports, DRY)

@@ -13,15 +13,19 @@ update itself from GitHub Releases.
 ## Component Map
 
 - **`guidance-protocol`**
-  - Responsibility: IPC request/response types (`Request`, `Response`) shared by all clients
+  - Responsibility: IPC request/response types (`Request`, `Response`) and the typed `Method`
+    enum shared by all clients
   - Inputs and outputs: serialized JSON over the local transport
   - Dependencies: `serde`, `serde_json`
 - **`guidance-ipc`**
-  - Responsibility: client side of the protocol plus the method dispatch table that maps a
-    method name to a runtime action
+  - Responsibility: client side of the protocol plus the dispatch that maps a method onto a
+    runtime action
+  - Modules: `lib.rs` (transport: Unix socket / named pipe, line reader), `dispatch.rs` (one
+    named handler per method, exhaustive `match` on `Method`), `error.rs` (`DispatchError` with the
+    exhaustive wire-code mapping), `params.rs` (`workload_id`, `tail` parsing)
   - Methods: `runtime.status`, `workload.list`, `workload.start`, `workload.stop`,
     `workload.restart`, `workload.stop_all`, `workload.start_all`, `workload.logs`,
-    `diagnostics.summary`; unknown methods fail with `method not found`
+    `diagnostics.summary`; unknown methods fail with `method not found: <name>` (`not_found`)
   - Dependencies: `guidance-protocol`, `guidance-runtime`, `anyhow`
 - **`guidance-runtime`** (library, 277 LOC)
   - Responsibility: workload supervision core — list/start/stop/restart, start/stop enabled
@@ -41,6 +45,11 @@ update itself from GitHub Releases.
 - **`guidance-update`** (library)
   - Responsibility: release lookup, asset selection (`windows-x64.zip`), SHA-256 verification,
     archive extraction, backup/replace/restart of the installation
+  - Structure: `lib.rs` (public API + composition root), `ports.rs` (`Releases`, `Downloader`,
+    `Installer` with boxed futures), `github.rs` (HTTP adapters), `install.rs` (ZIP/service
+    transaction), `selection.rs` (pure channel/version/checksum rules), `command.rs` (shared
+    CLI/updater command bodies), `params.rs` (`sha256_hex`), `tests.rs` (port-driven tests)
+  - Dependencies: `reqwest`, `sha2`, `zip`, `semver`, `toml`
 - **`guidance-updater`** (binary)
   - Responsibility: apply an update after the invoking process exits (`wait_for_exit`)
 
@@ -57,12 +66,20 @@ update itself from GitHub Releases.
 
 ## Design Patterns
 
-### Pattern: Method dispatch table
+### Pattern: Typed method enum + exhaustive dispatch
 
-- **Use when:** adding a new IPC command
-- **Implementation:** add an arm to the `match` on `q.method` in `crates/ipc/src/lib.rs` and a
-  corresponding CLI/tray call site; do not restructure the surrounding dispatch
-- **Avoid when:** the new behaviour is not a request/response interaction with the runtime
+- **Use when:** adding or changing an IPC method
+- **Implementation:** add a variant to `guidance_protocol::Method` (wire string in `as_str` and
+  `FromStr`, pinned by `wire_names_are_pinned`), then a handler in `crates/ipc/src/dispatch.rs`.
+  The compiler enforces both matches; no client may use a raw method string.
+- **Avoid when:** the behaviour is not a request/response interaction with the runtime
+
+### Pattern: Ports for the update pipeline
+
+- **Use when:** changing how releases are fetched, downloaded or installed
+- **Implementation:** implement `Releases`, `Downloader` or `Installer` in a new adapter and wire
+  it in `lib.rs` (the composition root). Tests use the same traits with fakes.
+- **Avoid when:** the change is pure selection logic — put that in `selection.rs` instead
 
 ### Pattern: Transactional self-update
 
@@ -107,7 +124,8 @@ SHA-256 → verify → hand off to `guidance-updater` → install with backup/re
 
 ## Testing Strategy
 
-- Unit tests: present but sparse — the workspace currently has 2 tests in total
+- Unit tests: 40 across the workspace — IPC error mapping and parameter parsing (13), protocol
+  method names (3), update selection/checksum/verification/install guard (23), runtime defaults (1)
 - Integration tests: none
 - End-to-end tests: none; build, clippy, and tests run in CI on Windows and Ubuntu
 - Manual checks: service install/uninstall via `scripts/install-dev.ps1` /
@@ -122,9 +140,9 @@ Record durable decisions as ADRs and link them here.
 
 ## Known Technical Risks
 
-- **Sparse test coverage** — a bugfix can outlive the process it modifies (updater), with no
-  automated protection. Mitigation: add focused tests around `guidance-update` first.
-- **Thin module surfaces** — `crates/ipc/src/lib.rs` implements dispatch in a single dense
-  expression, which is hard to review and violates SRP. See `remaining-work-plan.md` (RW-001).
+- **Untested destructive transaction** — the Windows backup/restore path in
+  `crates/update/src/install.rs` still has no test seam (`sc.exe` calls). Tracked as RW-005.
+- **IPC handlers lack a test seam** — `Runtime` requires a real config and spawns processes, so
+  handler behaviour is only covered indirectly. Tracked as RW-006.
 - **Spec/implementation drift** — `docs/SPECIFICATION-v1.1.md` (779 lines) describes considerably
-  more than the ~1.2k LOC implementation. Treat the spec as intent, the code as fact.
+  more than the ~2k LOC implementation. Treat the spec as intent, the code as fact.

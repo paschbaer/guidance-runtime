@@ -88,7 +88,7 @@ impl winit::application::ApplicationHandler for TrayApp {
     }
 
     fn about_to_wait(&mut self, elwt: &winit::event_loop::ActiveEventLoop) {
-        use guidance_protocol::Request;
+        use guidance_protocol::{Method, Request};
         use guidance_update::UpdateConfig;
         use semver::Version;
         use serde_json::json;
@@ -104,7 +104,7 @@ impl winit::application::ApplicationHandler for TrayApp {
             let ok = self
                 .runtime
                 .block_on(guidance_ipc::request(Request::new(
-                    "runtime.status",
+                    Method::RuntimeStatus.as_str(),
                     json!({}),
                 )))
                 .map(|r| r.error.is_none())
@@ -120,12 +120,12 @@ impl winit::application::ApplicationHandler for TrayApp {
             }
         } else if item.id == self.start_id {
             let _ = self.runtime.block_on(guidance_ipc::request(Request::new(
-                "workload.start_all",
+                Method::WorkloadStartAll.as_str(),
                 json!({}),
             )));
         } else if item.id == self.stop_id {
             let _ = self.runtime.block_on(guidance_ipc::request(Request::new(
-                "workload.stop_all",
+                Method::WorkloadStopAll.as_str(),
                 json!({}),
             )));
         } else if item.id == self.check_id {
