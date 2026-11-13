@@ -15,6 +15,9 @@
 - **Database or storage:** None. State is the config files under `config/` plus the filesystem
   (install directory, `log_dir`)
 - **Infrastructure:** Windows services (`sc.exe`), GitHub Releases as the distribution channel
+- **Packaging:** WiX Toolset v7 (`dotnet tool install --global wix --version 7.*`; v7 requires
+  `-acceptEula wix7`), MSI source in `installer/GuidanceRuntime.wxs`, built by
+  `scripts/build-installer.ps1` into `dist/`
 
 ## Repository Layout
 
@@ -67,6 +70,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 # Reset build state
 cargo clean
+
+# MSI installer (WiX v7; x64 or arm64)
+./scripts/build-installer.ps1
+./scripts/build-installer.ps1 -Arch arm64 -SkipBuild
 ```
 
 ## Development Environment

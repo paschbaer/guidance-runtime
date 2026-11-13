@@ -39,6 +39,14 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
 
 ## Recent Changes
 
+- `installer/GuidanceRuntime.wxs` (new), `scripts/build-installer.ps1` (new): WiX v7 MSI installer
+  mirroring `install-dev.ps1` — binaries, `GuidanceRuntime` service (auto start, config argument,
+  failure actions via deferred `sc.exe failure` custom action), `NeverOverwrite`/`Permanent`
+  example configs under `C:\ProgramData\Guidance Runtime\config`, logs folder; `x64`/`arm64` via
+  `-arch`. Build verified by a `wix build` link run with placeholder binaries (WiX 7.0.1,
+  `-acceptEula wix7`); no real machine install yet.
+- `.github/workflows/release.yml`: the MSI is now built per Windows matrix leg and attached to the
+  release alongside the ZIP and its SHA-256SUMS (`dist/*.msi` added to both publish steps).
 - `crates/cli/src/main.rs`, `crates/updater/src/main.rs`: `Cli::try_parse()` — clap usage errors
   exit 1, help/version exit 0; exit 2 remains exclusively `run.exit_status()` (commit `cf573af`).
 - `crates/cli/tests/exit_codes.rs`, `crates/updater/tests/exit_codes.rs` (new): 10 integration
@@ -148,6 +156,7 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
 
 ## Last Updated
 
-2026-11-13 (agent sessions: cross-platform fixtures and the measured Linux leg; owner and primary
-users recorded as "User"; CLI usage-error exit codes aligned with `update-cli.md` §2; ServiceControl
-port (RW-005/RW-004 Handled); governance approver named, constitution PATCH 1.0.1)
+2026-11-13 (agent sessions: WiX v7 MSI installer added and link-validated; cross-platform fixtures
+and the measured Linux leg; owner and primary users recorded as "User"; CLI usage-error exit codes
+aligned with `update-cli.md` §2; ServiceControl port (RW-005/RW-004 Handled); governance approver
+named, constitution PATCH 1.0.1)

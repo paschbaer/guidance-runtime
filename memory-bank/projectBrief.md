@@ -45,14 +45,15 @@ GitHub Releases.
 ### In Scope
 
 - Rust workspace with service, CLI, tray, updater, and shared protocol/IPC/supervision crates
+- WiX v7 MSI installer for Windows (`installer/GuidanceRuntime.wxs`)
 - TOML workload discovery and bounded restart policy
 - JSON Lines control protocol over Windows Named Pipes / Unix development socket
 - Update check, SHA-256 verification, backup/restore installation
 
 ### Out of Scope
 
-- Health probes, dependency graphs, event subscriptions, Credential Manager, MSI packaging,
-  Authenticode signing (see "Production hardening still required")
+- Health probes, dependency graphs, event subscriptions, Credential Manager, Authenticode signing
+  (see "Production hardening still required")
 
 ## Success Criteria
 

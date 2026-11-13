@@ -7,6 +7,7 @@ on:
       - 'crates/**'
       - 'config/**'
       - 'scripts/**'
+      - 'installer/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
@@ -59,8 +60,10 @@ jobs:
         include:
           - target: x86_64-pc-windows-msvc
             arch: windows-x64
+            wix_arch: x64
           - target: aarch64-pc-windows-msvc
             arch: windows-arm64
+            wix_arch: arm64
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -119,6 +122,27 @@ jobs:
             ./scripts/verify-arch.ps1 -Path $_.FullName -ExpectedTarget '${{ matrix.target }}'
           }
 
+      # MSI ProductVersion must be numeric; the beta suffix lives only in the
+      # asset file name, so the installer keeps one upgrade line per channel.
+      - name: Build MSI Installer
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+          MSI_VERSION: ${{ env.VERSION_MAJOR }}.${{ env.VERSION_MINOR }}.${{ github.run_number }}
+        run: |
+          if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
+            dotnet tool install --global wix --version 7.*
+          }
+          $msi = ./scripts/build-installer.ps1 `
+            -Arch '${{ matrix.wix_arch }}' `
+            -SkipBuild `
+            -BinDir "target/${{ matrix.target }}/release" `
+            -Version $env:MSI_VERSION
+          $target = "dist/guidance-runtime-$env:VERSION-${{ matrix.arch }}.msi"
+          Move-Item $msi $target
+          $hash = (Get-FileHash $target -Algorithm SHA256).Hash
+          "$hash  $(Split-Path $target -Leaf)" | Out-File "$target-SHA256SUMS.txt" -Encoding ascii
+
       # The staging directory only had to survive Compress-Archive and the PE
       # check; leaving it in dist/ uploads a folder next to the archive, which
       # `gh release create dist/*` then tries to attach as an asset.
@@ -175,9 +199,9 @@ jobs:
         if: needs.metadata.outputs.prerelease == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ needs.metadata.outputs.tag }}" dist/*.zip dist/*.txt --verify-tag --prerelease --generate-notes --latest=false --title "Guidance Runtime ${{ needs.metadata.outputs.version }} Beta"
+        run: gh release create "${{ needs.metadata.outputs.tag }}" dist/*.zip dist/*.msi dist/*.txt --verify-tag --prerelease --generate-notes --latest=false --title "Guidance Runtime ${{ needs.metadata.outputs.version }} Beta"
       - name: Publish Stable
         if: needs.metadata.outputs.prerelease == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ needs.metadata.outputs.tag }}" dist/*.zip dist/*.txt --verify-tag --latest --generate-notes --title "Guidance Runtime ${{ needs.metadata.outputs.version }}"
+        run: gh release create "${{ needs.metadata.outputs.tag }}" dist/*.zip dist/*.msi dist/*.txt --verify-tag --latest --generate-notes --title "Guidance Runtime ${{ needs.metadata.outputs.version }}"

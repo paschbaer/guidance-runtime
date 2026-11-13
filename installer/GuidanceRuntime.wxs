@@ -1,0 +1,104 @@
+<!--
+  Guidance Runtime Service — MSI installer source (WiX v4+ / v7 authoring schema).
+
+  Build via scripts/build-installer.ps1, which supplies the preprocessor variables:
+    $(GuidanceVersion) — workspace version from Cargo.toml (e.g. 1.1.0)
+    $(ReleaseBin)      — absolute path to target\release with the built executables
+    $(ConfigDir)       — absolute path to the repo config/ folder (example TOMLs)
+
+  Layout mirrors scripts/install-dev.ps1:
+    ProgramFiles64Folder\Guidance Runtime\        guidance-service.exe, guidance.exe,
+                                                  guidance-tray.exe, guidance-updater.exe
+    CommonAppDataFolder\Guidance Runtime\config\  example TOMLs, never overwritten
+    CommonAppDataFolder\Guidance Runtime\logs\    created empty
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Package Name="Guidance Runtime Service"
+           Manufacturer="Guidance"
+           Version="$(GuidanceVersion)"
+           Scope="perMachine"
+           UpgradeCode="7A4C1E92-3B5D-4F08-9A6E-2C8D51B70F34">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Guidance Runtime is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="Main"
+             Title="Guidance Runtime"
+             Description="Guidance Runtime Service binaries and Windows service registration."
+             Level="1">
+      <ComponentRef Id="Binaries" />
+      <ComponentRef Id="RuntimeConfigExample" />
+      <ComponentRef Id="UpdatesConfigExample" />
+      <ComponentRef Id="LogsDir" />
+    </Feature>
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Guidance Runtime">
+        <Component Id="Binaries" Guid="3E1A6D4F-92C7-4E28-B50A-6C9D2F1A83B5">
+          <File Id="ServiceExe" Name="guidance-service.exe" Source="$(ReleaseBin)\guidance-service.exe" KeyPath="yes" />
+          <File Id="CliExe" Name="guidance.exe" Source="$(ReleaseBin)\guidance.exe" />
+          <File Id="TrayExe" Name="guidance-tray.exe" Source="$(ReleaseBin)\guidance-tray.exe" />
+          <File Id="UpdaterExe" Name="guidance-updater.exe" Source="$(ReleaseBin)\guidance-updater.exe" />
+
+          <ServiceInstall Id="GuidanceRuntimeService"
+                          Name="GuidanceRuntime"
+                          DisplayName="Guidance Runtime Service"
+                          Description="Supervises and orchestrates local MCP server workloads for the Guidance Runtime."
+                          Start="auto"
+                          Type="ownProcess"
+                          ErrorControl="normal"
+                          Arguments='--config "[DATACONFIG]runtime.toml"' />
+
+          <ServiceControl Id="GuidanceRuntimeServiceControl"
+                          Name="GuidanceRuntime"
+                          Start="install"
+                          Stop="both"
+                          Remove="uninstall"
+                          Wait="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="DATAFOLDER" Name="Guidance Runtime">
+        <Directory Id="DATACONFIG" Name="config">
+          <!-- NeverOverwrite + Permanent: deploy the example TOMLs only when the files do
+               not exist yet and keep user configuration across repair and uninstall
+               (same semantics as install-dev.ps1). -->
+          <Component Id="RuntimeConfigExample" Guid="5C2B7E08-31D4-4F9A-A6B1-8E4C0D92F5A3" NeverOverwrite="yes" Permanent="yes">
+            <File Id="RuntimeConfigExampleFile"
+                  Name="runtime.toml"
+                  Source="$(ConfigDir)\runtime.example.toml"
+                  KeyPath="yes" />
+          </Component>
+          <Component Id="UpdatesConfigExample" Guid="9D3F8A12-6E4B-4C75-B2D9-1F0A5C63E8B4" NeverOverwrite="yes" Permanent="yes">
+            <File Id="UpdatesConfigExampleFile"
+                  Name="updates.toml"
+                  Source="$(ConfigDir)\updates.example.toml"
+                  KeyPath="yes" />
+          </Component>
+        </Directory>
+        <Directory Id="DATALOGS" Name="logs">
+          <Component Id="LogsDir" Guid="8F2A9C41-4D6E-4B3A-9C71-D0E5A18B2F6D" Permanent="yes">
+            <CreateFolder />
+          </Component>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Parity with install-dev.ps1: automatic restart on service failure.
+         Type 34 custom action (SystemFolder + command line), scheduled after the
+         service has been started. -->
+    <CustomAction Id="ConfigureServiceFailureActions"
+                  Directory="SystemFolder"
+                  ExeCommand="sc.exe failure GuidanceRuntime reset= 86400 actions= restart/5000/restart/15000/restart/60000"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+    <InstallExecuteSequence>
+      <Custom Action="ConfigureServiceFailureActions" After="StartServices" Condition="NOT REMOVE=&quot;ALL&quot;" />
+    </InstallExecuteSequence>
+
+  </Package>
+</Wix>

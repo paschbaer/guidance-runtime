@@ -56,6 +56,8 @@ None — see Change Log.
 - [ ] Validate the development environment end to end (install/uninstall via `scripts/*.ps1`).
       Checklist prepared: `memory-bank/validation-checklist.md` — execute on a real Windows
       machine and record exit codes there per its Recording section.
+- [ ] Validate the WiX installer end to end on a real Windows machine (`scripts/build-installer.ps1`,
+      then `msiexec` install/repair/uninstall with service start and config preservation).
 - [x] Decide the CLI-wide exit-code taxonomy: clap usage errors exit 2, which collides with the
       contract's "at least one target failed" status 2.
       → Decided and implemented 2026-11-13 (commit `cf573af`): usage errors exit 1, help/version
@@ -272,3 +274,23 @@ None — see Change Log.
 - The remaining tracked work (RW-005 handled; RW-006, RW-007 open with trigger points) is technical
   follow-up work, not a setup blocker. `--json`, the ADRs, the end-to-end environment check and the
   non-Windows release legs stay tracked as planned work.
+
+### 2026-11-13 — WiX v7 MSI installer
+
+- New MSI installer source `installer/GuidanceRuntime.wxs` (WiX v7 authoring schema,
+  `http://wixtoolset.org/schemas/v4/wxs`) and build script `scripts/build-installer.ps1`
+  (`-Arch x64|arm64`, `-SkipBuild`; emits `dist/guidance-runtime-<version>-<arch>.msi`).
+- Installer mirrors `install-dev.ps1`: the four binaries to `Program Files\Guidance Runtime`,
+  `GuidanceRuntime` service (auto start, `--config` argument), failure actions via a deferred
+  `sc.exe failure` custom action after `StartServices`, example TOMLs to
+  `C:\ProgramData\Guidance Runtime\config` with `NeverOverwrite` + `Permanent`, logs folder
+  created empty. Major upgrade enabled via fixed UpgradeCode.
+- Validation: `wix build` (v7.0.1) links the source cleanly with placeholder binaries; no real
+  install/uninstall has been executed yet. WiX v7 requires `-acceptEula wix7` (OSMF) — the switch
+  is baked into the build script.
+- Release integration: `.github/workflows/release.yml` builds the MSI per Windows matrix leg
+  (`wix_arch` matrix key, `dotnet tool install wix 7.*`, `build-installer.ps1 -SkipBuild -BinDir
+  target/<triple>/release -Version <numeric>`), renames it to
+  `guidance-runtime-<version>-<arch>.msi` with a SHA-256SUMS file, and publishes it in both
+  release steps. `installer/**` added to the trigger paths. MSI ProductVersion stays numeric
+  (`1.3.<run>`); the beta suffix lives only in the asset file name.
