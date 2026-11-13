@@ -68,5 +68,3 @@ A machine with an installation from before the marker existed is covered by a tr
 - On Linux, `secret-tool` exits 1 for both a missing item and an unreachable daemon; the backend distinguishes these only where the tool reports a distinct status.
 - A Windows credential blob provisioned as UTF-8 is mangled rather than rejected.
 - A not-installed target during `install` is reported and skipped with exit `0`; a *check* of the same target may report an access problem with exit `2`, because a check still tries to read the source. The two commands answer different questions.
-- The global `--json` flag on `guidance` is not wired to the update subcommands; use `--format json` on `guidance update check`.
-- Clap usage errors exit `2`, which collides with "at least one target failed"; configuration errors detected by the updater itself exit `1`.

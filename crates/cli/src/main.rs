@@ -23,8 +23,6 @@ enum Format {
 struct Cli {
     #[command(subcommand)]
     command: Command,
-    #[arg(long, global = true)]
-    json: bool,
 }
 #[derive(Subcommand)]
 enum Command {
@@ -93,7 +91,6 @@ async fn main() -> Result<()> {
             std::process::exit(if err.use_stderr() { 1 } else { 0 });
         }
     };
-    let json_output = cli.json;
     let command = match cli.command {
         Command::Update { command } => return update(command).await,
         other => other,
@@ -118,14 +115,7 @@ async fn main() -> Result<()> {
     if let Some(error) = response.error {
         bail!("{}: {}", error.code, error.message)
     }
-    println!(
-        "{}",
-        if json_output {
-            serde_json::to_string(&response.result)?
-        } else {
-            serde_json::to_string_pretty(&response.result)?
-        }
-    );
+    println!("{}", serde_json::to_string_pretty(&response.result)?);
     Ok(())
 }
 async fn update(command: UpdateCommand) -> Result<()> {
