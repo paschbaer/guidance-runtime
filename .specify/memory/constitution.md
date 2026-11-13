@@ -145,6 +145,9 @@ them — not by convention drift.
 constitution-only change, and merged with the Sync Impact Report removed. Amendments MUST NOT also
 carry unrelated implementation work.
 
+**Approval.** A constitution-only amendment MUST be approved by the role *Project Owner*,
+currently held by `User` (recorded 2026-11-13), before it is merged.
+
 **Versioning.** Semantic versioning: MAJOR for an incompatible removal or redefinition of a
 principle, MINOR for a new principle or materially expanded guidance, PATCH for clarifications and
 wording. The version line below MUST match the amendment record.
@@ -154,6 +157,6 @@ deviation with justification. Complexity or deviation that cannot be justified M
 Open production-hardening work is tracked in `docs/IMPLEMENTATION_STATUS.md`; this constitution
 governs how that work is done, not whether it is finished.
 
-**Version**: 1.0.0 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-12
+**Version**: 1.0.1 | **Ratified**: 2026-11-12 | **Last Amended**: 2026-11-13
 
-<!-- Version: 1.0.0 | Ratified: 2026-11-12 | Last Amended: 2026-11-12 -->
+<!-- Version: 1.0.1 | Ratified: 2026-11-12 | Last Amended: 2026-11-13 -->

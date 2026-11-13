@@ -117,13 +117,15 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
   `guidance-runtime` itself stays on the public source repository `paschbaer/guidance-runtime`.
   Mirroring artifacts into the private repository is the `guidance` product's own pipeline step
   (FR-027–FR-029), not a job in this repository's `release.yml`.
+- The Project Owner (currently "User") approves constitution-only amendments. Recorded as PATCH
+  1.0.1 because it names the decision-maker without changing a principle.
 
 ## Open Questions
 
 - [x] Who is the project owner (person or team) for `projectBrief.md`? — User (2026-11-13).
 - [x] Who are the primary users — workstation operators, or a wider developer audience? — User.
-- [ ] Which role approves amendments to the constitution (the ratification date is fixed at
-  2026-11-12)?
+- [x] Which role approves amendments to the constitution? — the Project Owner, currently held by
+  "User" (recorded 2026-11-13, constitution PATCH 1.0.1).
 
 ## Blockers
 
@@ -132,20 +134,15 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
 
 ## Next Actions
 
-1. Designate the role that approves constitution amendments (RW-009); the project owner and the
-   primary users are recorded as "User".
-2. ~~Decide the CLI-wide exit-code taxonomy~~ — done 2026-11-13, commit `cf573af`.
-3. Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
-4. ~~Add a service-control port (RW-005)~~ — done 2026-11-13, commits `907088f`/`8f13b4b`.
-5. Restart the Guidance server so the final `.guidance/` state is snapshotted.
-6. Re-bless `.guidance/state/final-review.json` (`headCommit`) after the next commit that changes
+1. Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
+2. Restart the Guidance server so the final `.guidance/` state is snapshotted.
+3. Re-bless `.guidance/state/final-review.json` (`headCommit`) after the next commit that changes
    code, before re-running the completion gate.
-7. Push `feature/cli-exit-codes-and-service-port` (operator approval pending) and confirm CI green
-   on all three legs — the Linux build restoration (`8f13b4b`) is verified only by static analysis
-   locally.
+4. Confirm CI is green on all three legs for `4b83ea0` — the Linux build restoration (`8f13b4b`)
+   was verified only by static analysis locally.
 
 ## Last Updated
 
-2026-11-13 (agent session: CLI usage-error exit codes aligned with `update-cli.md` §2;
-ServiceControl port makes the install transaction's service branches testable, RW-005/RW-004
-Handled)
+2026-11-13 (agent sessions: cross-platform fixtures and the measured Linux leg; owner and primary
+users recorded as "User"; CLI usage-error exit codes aligned with `update-cli.md` §2; ServiceControl
+port (RW-005/RW-004 Handled); governance approver named, constitution PATCH 1.0.1)

@@ -62,7 +62,6 @@ None — see Change Log.
 
 ## Known Issues
 
-- The amendment approver role is still undesignated (RW-009).
 - `projectBrief.md` and `productContext.md` no longer contain template placeholders; their
   remaining open items are roadmap questions recorded in `productContext.md`.
 - The Windows service-control transaction is now covered by fake-driven `#[cfg(windows)]` tests
@@ -249,3 +248,12 @@ None — see Change Log.
   would have broken the Linux build — fixed in `8f13b4b` before review closure.
 - Workspace tests 164 → 173 (147 → 151 in `guidance-update`, plus 10 CLI/updater exit-code
   tests). Gates green locally on Windows; the pushed CI legs are the pending check.
+
+### 2026-11-13 — Governance amendment (approver named)
+
+- The constitution's Governance section now names the role that approves a constitution-only
+  amendment: the *Project Owner*, currently `User`. Recorded as PATCH 1.0.1 (a clarification, no
+  principle changed), Last Amended 2026-11-13; amendment commit `b84f879`.
+- RW-009 is closed in `remaining-work-plan.md`; the amendment was kept as a constitution-only
+  commit on its own branch so it does not carry the exit-code or service-port work. The merge
+  resolved the expected memory-bank overlap with the chained-workflow branch.
