@@ -80,7 +80,8 @@ Use these terms consistently in code, documentation, and interfaces.
 
 ## Open Product Questions
 
-- [ ] Who is the owner of the repository, and who are the intended primary users?
+- [x] Who is the owner of the repository, and who are the intended primary users? — Owner:
+      User; primary users: User (recorded 2026-11-13).
 - [ ] Is the Linux/macOS support in the specification a committed roadmap item or aspirational?
 - [ ] Which hardening items from `docs/IMPLEMENTATION_STATUS.md` are required before a first
       "production" release?

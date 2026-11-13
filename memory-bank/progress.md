@@ -41,8 +41,7 @@ depend on input from the maintainers.
 
 ## In Progress
 
-- [ ] Complete `projectBrief.md` (owner and primary users still open).
-- [ ] Document user needs and domain rules in `productContext.md`.
+None — see Change Log.
 
 ## Planned
 
@@ -59,7 +58,8 @@ depend on input from the maintainers.
 ## Known Issues
 
 - The amendment approver role is still undesignated (RW-009).
-- `projectBrief.md` and `productContext.md` still contain template placeholders.
+- `projectBrief.md` and `productContext.md` no longer contain template placeholders; their
+  remaining open items are roadmap questions recorded in `productContext.md`.
 - The Windows service-control transaction is still only partially testable: the service-state half
   of target isolation (RW-005) is not covered by an automated test because `sc.exe` is not behind a
   port. The file replacement, rollback and marker behaviour are covered.
@@ -81,7 +81,7 @@ depend on input from the maintainers.
 
 **Exit criteria:**
 
-- [ ] Project brief is complete.
+- [x] Project brief is complete (owner and primary users recorded 2026-11-13).
 - [x] Constitution is ratified (v1.0.0, 2026-11-12).
 - [x] Build, test, lint, and run commands are documented and verified.
 - [x] Architecture and important boundaries are documented.
@@ -208,3 +208,11 @@ depend on input from the maintainers.
   `macos-latest` completed `cargo fmt --check`, clippy `-D warnings`, `cargo test --workspace` and
   the release build successfully. Linux resolves `linux-x86_64.zip`, so the stale RW-008 finding
   was closed as handled.
+
+### 2026-11-13 — Ownership recorded
+
+- `projectBrief.md`: owner and primary users recorded as "User" (previously unconfirmed); the CI
+  success criterion names all three matrix legs. `productContext.md` answers the owner/user
+  question.
+- Still open by design: which role approves constitution amendments (RW-009), and whether
+  Linux/macOS support is a committed roadmap item.

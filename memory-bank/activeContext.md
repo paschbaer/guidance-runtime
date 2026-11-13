@@ -33,8 +33,9 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
 - [x] Merge feature 001 into `develop`; final review (`.guidance/state/final-review.json`) and
       session lessons recorded. Workspace tests: 164 on Windows, 159 on Linux.
 - [x] Make the `guidance-update` fixtures platform-independent so the `ubuntu-latest` leg passes.
-- [ ] Complete `projectBrief.md` — blocked on owner and primary-user input.
-- [ ] Complete `productContext.md` — user journeys need product input.
+- [x] Complete `projectBrief.md` — owner and primary users recorded as "User" (2026-11-13).
+- [x] Complete `productContext.md` — user needs and journeys documented; the remaining open items
+      are roadmap questions, not documentation gaps.
 
 ## Recent Changes
 
@@ -98,18 +99,20 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
 
 ## Open Questions
 
-- [ ] Who is the project owner (person or team) for `projectBrief.md`?
-- [ ] Who are the primary users — workstation operators, or a wider developer audience?
+- [x] Who is the project owner (person or team) for `projectBrief.md`? — User (2026-11-13).
+- [x] Who are the primary users — workstation operators, or a wider developer audience? — User.
 - [ ] Which role approves amendments to the constitution (the ratification date is fixed at
   2026-11-12)?
 
 ## Blockers
 
-- `projectBrief.md` and `productContext.md` cannot be completed without product/ownership input.
+- `productContext.md` still has open roadmap questions: whether Linux/macOS support is committed,
+  and which hardening items gate a first "production" release. Those need product input, not code.
 
 ## Next Actions
 
-1. Answer the open questions above, then fill `projectBrief.md` and `productContext.md`.
+1. Designate the role that approves constitution amendments (RW-009); the project owner and the
+   primary users are recorded as "User".
 2. Decide the CLI-wide exit-code taxonomy (clap usage errors currently exit 2, colliding with
    "at least one target failed").
 3. Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
@@ -121,4 +124,5 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
 
 ## Last Updated
 
-2026-11-13 (agent session: cross-platform test fixtures, Linux leg measured under WSL)
+2026-11-13 (agent session: cross-platform test fixtures, Linux leg measured under WSL; project
+brief owner and primary users recorded as "User")

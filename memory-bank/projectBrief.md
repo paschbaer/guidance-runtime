@@ -7,10 +7,10 @@
 
 - **Name:** Guidance Runtime Service (GRS), repository `guidance-runtime`
 - **Repository:** `guidance-runtime` (Cargo workspace, version 1.1.0)
-- **Owner:** (to be confirmed — not stated in the repository)
+- **Owner:** User
 - **Status:** Functional implementation baseline; not a certified production release
   (`docs/IMPLEMENTATION_STATUS.md`)
-- **Last reviewed:** 2026-11-12
+- **Last reviewed:** 2026-11-13
 
 ## Purpose
 
@@ -21,8 +21,7 @@ GitHub Releases.
 
 ## Target Users
 
-- **Primary users:** developers and operators running several MCP servers on one Windows
-  workstation (assumption — derived from the tray/CLI feature set).
+- **Primary users:** User
 - **Secondary users:** automation and agent tooling that drives GRS through its IPC protocol.
 - **Maintainers and operators:** whoever installs the service, configures `config/runtime.toml`,
   and publishes releases.
@@ -57,7 +56,7 @@ GitHub Releases.
 
 ## Success Criteria
 
-- CI is green on both matrix OSes (`fmt`, `clippy -D warnings`, `test`, release build).
+- CI is green on all three matrix OSes (`windows-latest`, `ubuntu-latest`, `macos-latest`).
 - A configured workload can be started, stopped, restarted, and inspected via CLI and tray.
 - An update is applied only from a release with a matching SHA-256 asset, and rolls back on
   failure.
@@ -74,7 +73,7 @@ GitHub Releases.
 
 ## Key Stakeholders
 
-- Repository owner and maintainers (to be named)
+- Repository owner: User
 - Operators installing and running the Windows service
 
 ## References
