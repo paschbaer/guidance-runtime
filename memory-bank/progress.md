@@ -48,10 +48,15 @@ None — see Change Log.
 - [ ] Define the first milestone and acceptance criteria.
 - [ ] Add a service-control port so the backup/restore transaction becomes testable (RW-005).
       This gap is now explicit: the Windows service-state half of scenario 7 has no automated test.
+      → Handled 2026-11-13 (commit `907088f`): service-control port + fake-driven transaction tests;
+      RW-005 marked Handled in `remaining-work-plan.md`.
 - [ ] Record initial architectural decisions as ADRs.
 - [ ] Validate the development environment end to end (install/uninstall via `scripts/*.ps1`).
 - [ ] Decide the CLI-wide exit-code taxonomy: clap usage errors exit 2, which collides with the
       contract's "at least one target failed" status 2.
+      → Decided and implemented 2026-11-13 (commit `cf573af`): usage errors exit 1, help/version
+      exit 0, exit 2 stays reserved for target failures (contract `update-cli.md` §2). Pinned by
+      `crates/cli/tests/exit_codes.rs` and `crates/updater/tests/exit_codes.rs`.
 - [ ] Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
 - [ ] Add macOS/Linux release legs once non-Windows artifacts are published.
 
@@ -60,9 +65,9 @@ None — see Change Log.
 - The amendment approver role is still undesignated (RW-009).
 - `projectBrief.md` and `productContext.md` no longer contain template placeholders; their
   remaining open items are roadmap questions recorded in `productContext.md`.
-- The Windows service-control transaction is still only partially testable: the service-state half
-  of target isolation (RW-005) is not covered by an automated test because `sc.exe` is not behind a
-  port. The file replacement, rollback and marker behaviour are covered.
+- The Windows service-control transaction is now covered by fake-driven `#[cfg(windows)]` tests
+  (RW-005 Handled, commit `907088f`); real `sc.exe` behaviour itself is still exercised only in
+  production, and the new tests run on the `windows-latest` CI leg only.
 - IPC handlers have no direct test seam until a supervisor port exists (RW-006).
 - A private update target reports `no access to update source` when its credential entry is absent,
   with a provisioning hint naming the platform store target.
@@ -227,3 +232,20 @@ None — see Change Log.
   which repository an operator configures.
 - Mirroring into the private repository remains the `guidance` product's pipeline step; this
   repository's `release.yml` publishes only its own releases, as `research.md` (R8) already states.
+
+### 2026-11-13 — CLI exit codes and service-control port (chained plain workflows)
+
+- **CLI exit-code taxonomy (commit `cf573af`):** clap usage errors now exit 1 instead of 2
+  (`Cli::try_parse()` in both binaries; `use_stderr()` decides the stream, help/version exit 0).
+  Exit 2 stays reserved for "at least one target failed" (contract `update-cli.md` §2). Pinned by
+  5 integration tests per binary (`crates/cli/tests/exit_codes.rs`,
+  `crates/updater/tests/exit_codes.rs`, spawned via `CARGO_BIN_EXE_*`). READMEs and
+  `IMPLEMENTATION_STATUS.md` no longer describe the old clap-exits-2 deviation.
+- **Service-control port (commits `907088f`, `8f13b4b`):** `trait ServiceControl` with the real
+  `ScControl` adapter (sole `sc.exe` site, owns the 2 s settle delay); `install_on_windows` and
+  `restore` take `&dyn ServiceControl`; `install_archive` stays platform-neutral. Four
+  `#[cfg(windows)]` tests drive stop/start/rollback branches with a recording fake. An
+  independent review caught an accidental `#[cfg(windows)]` leak onto `install_archive` that
+  would have broken the Linux build — fixed in `8f13b4b` before review closure.
+- Workspace tests 164 → 173 (147 → 151 in `guidance-update`, plus 10 CLI/updater exit-code
+  tests). Gates green locally on Windows; the pushed CI legs are the pending check.

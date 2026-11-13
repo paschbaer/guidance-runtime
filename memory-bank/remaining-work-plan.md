@@ -55,12 +55,13 @@ For every tracked follow-up, include:
 - **Finding:** The workspace contained 2 tests in total, while `guidance-update` implements a
   multi-step, destructive transaction (stop service, back up, extract, replace, restart, restore
   on failure) that is exercised on every update.
-- **Action:** Partially handled — `guidance-update` now exposes ports (`Releases`, `Downloader`,
+- **Action:** Handled — `guidance-update` now exposes ports (`Releases`, `Downloader`,
   `Installer`) and covers channel/version selection, checksum parsing, checksum verification and
-  verification rejection with 23 tests driven through fakes. The backup/restore transaction itself
-  is still untested (see open follow-up RW-005).
+  verification rejection with fakes, and the backup/restore transaction itself is covered since
+  RW-005 was handled (service-control port plus `#[cfg(windows)]` transaction tests in
+  `install.rs`).
 - **Origin:** Session 2026-11-12 (`systemPatterns.md` → Known Technical Risks).
-- **Status:** Open
+- **Status:** Handled
 
 ### RW-005 — Windows backup/restore transaction remains untested
 
@@ -68,12 +69,15 @@ For every tracked follow-up, include:
   → back up → replace → restart, restore on failure) has no test seam for `sc.exe` or the
   filesystem transaction. Archive path-traversal rejection IS covered (in-memory ZIP with a
   `../evil.exe` entry, Windows-gated); the backup/restore branches are not.
-- **Trigger point:** The next change to the install transaction, or the first Windows CI job that
-  can install a service.
-- **Action:** Required — extract the service-control calls behind a small port and drive the
-  backup/restore branches with a fake in a temp directory.
 - **Origin:** Session 2026-11-12 (plan review finding F2 / remaining concern 2).
-- **Status:** Open
+- **Status:** Handled 2026-11-13 — commit `907088f` + `8f13b4b`. `trait ServiceControl` with the
+  real `ScControl` adapter (sole `sc.exe` site, owns the 2 s settle delay);
+  `install_on_windows`/`restore` take `&dyn ServiceControl`; `install_archive` stays
+  platform-neutral. Evidence: the four `#[cfg(windows)]` tests
+  `a_served_target_stops_replaces_and_starts`,
+  `a_failed_start_restores_the_old_state_and_stops_before_restoring`,
+  `a_failed_stop_aborts_before_touching_the_installation`,
+  `a_fake_driven_install_does_not_incur_the_settle_delay`.
 
 ### RW-006 — IPC handlers have no direct test seam
 

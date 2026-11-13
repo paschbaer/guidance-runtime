@@ -21,6 +21,27 @@ For every lesson, include:
 
 ## Validated Lessons
 
+### A contract that documents an accepted deviation drifts silently
+
+- **Date:** 2026-11-13
+- **Context:** Aligning the CLI usage-error exit status with `update-cli.md` §2 (which already
+  defined usage errors as exit 1).
+- **Observation:** The implementation exited 2 via clap's default and the READMEs described that
+  deviation as if it were the contract ("also exits 2, because clap uses that status"). Every
+  gate stayed green for the whole feature lifecycle.
+- **Root cause:** A contract's table and the implementation are only reconciled at review time;
+  once the deviation is written into prose, prose-vs-prose comparison passes and prose-vs-behavior
+  comparison never runs.
+- **Lesson:** When a contract defines a status taxonomy, pin each class with an integration test
+  that asserts the exit code, and treat a doc sentence that explains a deviation as a bug marker,
+  not as documentation.
+- **Action:** `crates/cli/tests/exit_codes.rs` and `crates/updater/tests/exit_codes.rs` now pin
+  the 0/1/2 classes for both binaries; the deviation sentence was rewritten in all three
+  documents (commit `cf573af`).
+- **Evidence:** `specs/001-multi-target-update-sources/contracts/update-cli.md` §2, commit
+  `cf573af`, session lesson `contract-that-documents-a-deviation-drifts-silently`
+- **Status:** Validated
+
 ### Platform-gated code hides compile errors from the local build
 
 - **Date:** 2026-11-12

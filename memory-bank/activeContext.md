@@ -39,6 +39,16 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
 
 ## Recent Changes
 
+- `crates/cli/src/main.rs`, `crates/updater/src/main.rs`: `Cli::try_parse()` — clap usage errors
+  exit 1, help/version exit 0; exit 2 remains exclusively `run.exit_status()` (commit `cf573af`).
+- `crates/cli/tests/exit_codes.rs`, `crates/updater/tests/exit_codes.rs` (new): 10 integration
+  tests pinning the exit-code contract via `CARGO_BIN_EXE_*` spawns.
+- `crates/update/src/install.rs`: `trait ServiceControl` + real `ScControl` adapter (sole
+  `sc.exe` site, owns the 2 s settle delay); `install_on_windows`/`restore` take `&dyn
+  ServiceControl`; four fake-driven `#[cfg(windows)]` transaction tests (commits `907088f`,
+  `8f13b4b`). RW-005 and RW-004 now Handled in `remaining-work-plan.md`.
+- `README.md` l.103, `README.de.md` l.103, `docs/IMPLEMENTATION_STATUS.md` l.30: usage-error exit
+  status corrected to 1; exit 2 documented as reserved for target failures.
 - `crates/update/src/tests.rs`, `crates/update/src/credentials.rs`: the first `ubuntu-latest` run
   failed 23 tests. Fixtures now derive the archive from
   `asset_suffix_for_arch(running_arch())` (`running_zip()`) instead of hard-coding
@@ -94,6 +104,12 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
 - A not-installed target is never installed; during `install` it is reported and skipped with 0,
   while a `check` of the same target may report an access problem with 2. The commands answer
   different questions and the docs state the difference.
+- Command-line usage errors exit 1 (nothing was run), not clap's default 2; exit 2 is reserved for
+  "at least one target failed". The rejected alternative (exit 64, EX_USAGE) would need a contract
+  change for no automation benefit.
+- `sc.exe` is invoked from exactly one place: the `ScControl` adapter, which also owns the 2 s
+  settle delay after stop. Tests drive the transaction with a recording fake, so service-state
+  rollback branches are covered without a real service.
 - Windows installation remains the only implemented install platform; macOS/Linux checking is
   supported and the CI leg exists, but non-Windows release legs are deferred until artifacts exist.
 - The `guidance` product is obtained from a separate, **release-only private** repository,
@@ -118,16 +134,18 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
 
 1. Designate the role that approves constitution amendments (RW-009); the project owner and the
    primary users are recorded as "User".
-2. Decide the CLI-wide exit-code taxonomy (clap usage errors currently exit 2, colliding with
-   "at least one target failed").
+2. ~~Decide the CLI-wide exit-code taxonomy~~ — done 2026-11-13, commit `cf573af`.
 3. Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
-4. Add a service-control port so the Windows service-state half of target isolation becomes testable
-   (RW-005).
+4. ~~Add a service-control port (RW-005)~~ — done 2026-11-13, commits `907088f`/`8f13b4b`.
 5. Restart the Guidance server so the final `.guidance/` state is snapshotted.
 6. Re-bless `.guidance/state/final-review.json` (`headCommit`) after the next commit that changes
    code, before re-running the completion gate.
+7. Push `feature/cli-exit-codes-and-service-port` (operator approval pending) and confirm CI green
+   on all three legs — the Linux build restoration (`8f13b4b`) is verified only by static analysis
+   locally.
 
 ## Last Updated
 
-2026-11-13 (agent session: cross-platform test fixtures, Linux leg measured under WSL; project
-brief owner and primary users recorded as "User")
+2026-11-13 (agent session: CLI usage-error exit codes aligned with `update-cli.md` §2;
+ServiceControl port makes the install transaction's service branches testable, RW-005/RW-004
+Handled)
