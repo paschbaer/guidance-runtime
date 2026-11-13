@@ -204,3 +204,7 @@ depend on input from the maintainers.
   clippy `-D warnings`, 164 tests) and the full workspace under WSL/Linux (159 tests). The Linux run
   also caught a second, Windows-invisible defect: a checksum fixture whose text still named the
   literal `windows-x64.zip`.
+- CI confirms it on all three legs (run 5, commit `28737dd`): `windows-latest`, `ubuntu-latest` and
+  `macos-latest` completed `cargo fmt --check`, clippy `-D warnings`, `cargo test --workspace` and
+  the release build successfully. Linux resolves `linux-x86_64.zip`, so the stale RW-008 finding
+  was closed as handled.

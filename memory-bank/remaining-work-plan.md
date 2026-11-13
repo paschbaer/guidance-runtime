@@ -97,16 +97,6 @@ For every tracked follow-up, include:
 - **Origin:** Session 2026-11-12 (independent review of the arch-aware selection).
 - **Status:** Open
 
-### RW-008 — Non-Windows `update check` reports a Windows-looking suffix
-
-- **Finding:** On Linux the derived pattern is still `windows-*.zip`, so `guidance update check`
-  succeeds with a meaningless result before `install` refuses. Not a correctness risk, but a
-  confusing diagnostic.
-- **Trigger point:** The first time `guidance update check` is offered on a non-Windows host.
-- **Action:** Accepted observation — document if the CLI is ever shipped cross-platform.
-- **Origin:** Session 2026-11-12 (independent review of the arch-aware selection).
-- **Status:** Open
-
 ### RW-009 — Amendment approver role is undesignated
 
 - **Finding:** Constitution v1.0.0 was ratified on 2026-11-12, but the repository still names
@@ -126,6 +116,21 @@ For every tracked follow-up, include:
 - **Action:** Handled — the steps were removed and replaced by `Swatinem/rust-cache@v2` plus a
   `cargo build --workspace --release` step in commit `d644d65`.
 - **Origin:** Session 2026-11-12 (committed as `22105f7`, removed in `d644d65`).
+- **Status:** Handled
+
+### RW-008 — Non-Windows `update check` reports a Windows-looking suffix
+
+- **Finding:** On Linux the derived pattern was still `windows-*.zip`, so `guidance update check`
+  succeeded with a meaningless result before `install` refuses. Not a correctness risk, but a
+  confusing diagnostic.
+- **Action:** Handled — the premise no longer holds. `UpdateTarget::resolved_asset_pattern` derives
+  the suffix from `asset_suffix_for_arch(running_arch())`, and `arch.rs` maps Windows, macOS and
+  Linux for x86_64 and aarch64. `an_omitted_pattern_derives_from_the_running_architecture` pins the
+  expected per-host value in an explicit table, and the `ubuntu-latest` leg is green on commit
+  `28737dd`, so a Linux host resolves `linux-x86_64.zip`. The finding also hid the real defect: the
+  `guidance-update` fixtures themselves hard-coded `windows-*.zip` and are now derived.
+- **Origin:** Session 2026-11-12 (independent review of the arch-aware selection); re-checked and
+  closed 2026-11-13 while fixing the cross-platform fixtures.
 - **Status:** Handled
 
 ## Accepted Observations

@@ -12,8 +12,8 @@ disturbing another target.
 
 ## Current Objective
 
-Keep CI green on every matrix leg. The feature is closed out; the open repository work is the
-deferred items below.
+CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-latest`, commit
+`28737dd`). The feature is closed out; the open repository work is the deferred items below.
 
 ## Current Work
 
@@ -45,7 +45,8 @@ deferred items below.
   architecture-crossing tests keep explicit suffixes; the omitted-pattern test pins an explicit
   per-host table instead of mirroring `asset_suffix_for_arch`. The credential-command test now
   asserts that exactly one argument mentions the entry (the entry itself), which is the property
-  that fails when an entry is joined into a shell string.
+  that fails when an entry is joined into a shell string. CI run 5 (`28737dd`) is green on
+  `windows-latest`, `ubuntu-latest` and `macos-latest`.
 - `crates/update/src/report.rs`: dedicated `JsonDocument` (`spec_version`, RFC3339 `checked_at`,
   `exit_status`, `targets[]`) and `render_json`/`render_json_now`; `UpdateRun` remains timestamp-free
   and not `Serialize`. Human rendering keeps the verbatim access phrase and de-duplicates the

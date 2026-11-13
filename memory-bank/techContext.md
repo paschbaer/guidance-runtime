@@ -72,9 +72,9 @@ cargo clean
 ## Development Environment
 
 - **Supported operating systems:** Windows is the implementation target. Linux and macOS are
-  planned for later releases (see `docs/SPECIFICATION-v1.1.md` §1) — currently only
-  `cargo build`/`test`/`clippy` run on Ubuntu in CI; service, tray, and install paths are
-  `cfg(windows)`-gated.
+  planned for later releases (see `docs/SPECIFICATION-v1.1.md` §1) — currently `cargo
+  build`/`test`/`clippy` and the release build run on Ubuntu and macOS in CI; service, tray, and
+  install paths are `cfg(windows)`-gated.
 - **Recommended editor:** Zed or VS Code (repository contains `.vscode/`)
 - **Environment variables:** Document names only, never values
 
@@ -92,7 +92,8 @@ cargo clean
 ## CI/CD
 
 - **CI provider:** GitHub Actions
-  - `.github/workflows/ci.yml`: matrix `windows-latest` and `ubuntu-latest`, native builds
+  - `.github/workflows/ci.yml`: matrix `windows-latest`, `ubuntu-latest` and `macos-latest`, native
+    builds
   - `.github/workflows/build.yml` (`Runtime CI`): matrix `x86_64-pc-windows-msvc` and
     `aarch64-pc-windows-msvc` on `windows-latest` (x64 runner), so the arm64 leg cross-compiles
 - **Validation workflow:** `cargo fmt --all -- --check` → `cargo clippy --workspace

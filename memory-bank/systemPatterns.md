@@ -135,11 +135,12 @@ SHA-256 → verify → hand off to `guidance-updater` → install with backup/re
 
 ## Testing Strategy
 
-- Unit tests: 55 across the workspace — IPC error mapping and parameter parsing (13), protocol
-  method names (3), update architecture mapping/selection/checksum/verification/install guard
-  (38), runtime defaults (1)
+- Unit tests: 164 across the workspace on Windows (159 on Linux and macOS, where the
+  `#[cfg(windows)]` install tests do not compile) — IPC error mapping and parameter parsing (13),
+  protocol method names (3), update architecture mapping/selection/checksum/verification/install
+  guard (147), runtime defaults (1)
 - Integration tests: none
-- End-to-end tests: none; build, clippy, and tests run in CI on Windows and Ubuntu
+- End-to-end tests: none; build, clippy, and tests run in CI on Windows, Ubuntu and macOS
 - Manual checks: service install/uninstall via `scripts/install-dev.ps1` /
   `scripts/uninstall-dev.ps1`, tray interaction, `guidance update check`
 
