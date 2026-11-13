@@ -4,17 +4,16 @@
 
 ## Current Focus
 
-Spec-Kit feature `001-multi-target-update-sources` is implemented through T040 on
-`feature/multi-target-update-sources`. The updater fans out over a configurable target list, reads a
+Spec-Kit feature `001-multi-target-update-sources` is implemented (T001-T040), reviewed and
+**merged into `develop`** (`5b064ee`). The updater fans out over a configurable target list, reads a
 private source with a credential from the platform store, renders text or JSON, derives the installed
 version from a per-target marker, and installs each target transactionally (Windows) without
 disturbing another target.
 
 ## Current Objective
 
-Close out feature 001: commit the work, record the independent final review and session lessons, and
-validate the completion gate honestly. The remaining repository work is the deferred items below,
-not this feature.
+Keep CI green on every matrix leg. The feature is closed out; the open repository work is the
+deferred items below.
 
 ## Current Work
 
@@ -30,12 +29,23 @@ not this feature.
       classification, credential wiring.
 - [x] Implement phases 5-7 (T023-T040): structured text and JSON output, `--format`, version
       marker, shared transactional install, per-target orchestration, macOS CI leg, docs, READMEs,
-      least privilege, quickstart validation. Workspace tests 166 (147 in `guidance-update`).
+      least privilege, quickstart validation.
+- [x] Merge feature 001 into `develop`; final review (`.guidance/state/final-review.json`) and
+      session lessons recorded. Workspace tests: 164 on Windows, 159 on Linux.
+- [x] Make the `guidance-update` fixtures platform-independent so the `ubuntu-latest` leg passes.
 - [ ] Complete `projectBrief.md` — blocked on owner and primary-user input.
 - [ ] Complete `productContext.md` — user journeys need product input.
 
 ## Recent Changes
 
+- `crates/update/src/tests.rs`, `crates/update/src/credentials.rs`: the first `ubuntu-latest` run
+  failed 23 tests. Fixtures now derive the archive from
+  `asset_suffix_for_arch(running_arch())` (`running_zip()`) instead of hard-coding
+  `windows-*.zip`, and a `other_arch_zip()` helper supplies a provably foreign archive. The
+  architecture-crossing tests keep explicit suffixes; the omitted-pattern test pins an explicit
+  per-host table instead of mirroring `asset_suffix_for_arch`. The credential-command test now
+  asserts that exactly one argument mentions the entry (the entry itself), which is the property
+  that fails when an entry is joined into a shell string.
 - `crates/update/src/report.rs`: dedicated `JsonDocument` (`spec_version`, RFC3339 `checked_at`,
   `exit_status`, `targets[]`) and `render_json`/`render_json_now`; `UpdateRun` remains timestamp-free
   and not `Serialize`. Human rendering keeps the verbatim access phrase and de-duplicates the
@@ -98,15 +108,16 @@ not this feature.
 
 ## Next Actions
 
-1. Commit the phase 5-7 work as one feature commit; write the final-review evidence after the commit.
-2. Answer the open questions above, then fill `projectBrief.md` and `productContext.md`.
-3. Decide the CLI-wide exit-code taxonomy (clap usage errors currently exit 2, colliding with
+1. Answer the open questions above, then fill `projectBrief.md` and `productContext.md`.
+2. Decide the CLI-wide exit-code taxonomy (clap usage errors currently exit 2, colliding with
    "at least one target failed").
-4. Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
-5. Add a service-control port so the Windows service-state half of target isolation becomes testable
+3. Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
+4. Add a service-control port so the Windows service-state half of target isolation becomes testable
    (RW-005).
-6. Restart the Guidance server so the final `.guidance/` state is snapshotted.
+5. Restart the Guidance server so the final `.guidance/` state is snapshotted.
+6. Re-bless `.guidance/state/final-review.json` (`headCommit`) after the next commit that changes
+   code, before re-running the completion gate.
 
 ## Last Updated
 
-2026-11-12 (agent session: feature 001 phases 5-7 implemented and validated)
+2026-11-13 (agent session: cross-platform test fixtures, Linux leg measured under WSL)

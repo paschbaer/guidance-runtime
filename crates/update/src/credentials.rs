@@ -289,25 +289,28 @@ mod tests {
     /// would turn a typo into command injection.
     #[test]
     fn the_command_carries_the_entry_as_a_single_argument() {
+        const ENTRY: &str = "guidance with space";
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
-            let cmd = command_for("guidance with space").expect("a backend exists here");
+            let cmd = command_for(ENTRY).expect("a backend exists here");
             assert!(
-                cmd.args.iter().any(|a| a == "guidance with space"),
+                cmd.args.iter().any(|a| a == ENTRY),
                 "the entry must be one argument element: {:?}",
                 cmd.args
             );
-            assert!(
-                !cmd.args
-                    .iter()
-                    .any(|a| a.contains(' ') && a.contains("guidance")),
-                "no argument may join the entry with other text: {:?}",
+            // Exactly one argument may mention the entry, and that one is the
+            // entry itself: this is what fails when the entry is joined into a
+            // shell string or appended to a flag.
+            assert_eq!(
+                cmd.args.iter().filter(|a| a.contains(ENTRY)).count(),
+                1,
+                "only the entry itself may mention it: {:?}",
                 cmd.args
             );
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
-            assert!(command_for("guidance").is_none());
+            assert!(command_for(ENTRY).is_none());
         }
     }
 

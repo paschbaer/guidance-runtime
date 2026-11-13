@@ -186,4 +186,21 @@ depend on input from the maintainers.
   correctly); `[[targets]]` no longer defaults a missing `install_dir` to the runtime's directory;
   install skips a not-installed target before resolving a credential, so a private target without
   an installation is not reported as an access failure.
-- Workspace tests 109 → 166 (147 in `guidance-update`).
+- Workspace tests 109 → 164 (147 in `guidance-update`).
+
+### 2026-11-13 — Cross-platform test fixtures (Linux CI leg)
+
+- The first `ubuntu-latest` run failed 23 `guidance-update` tests. Two root causes: a credential
+  assertion that rejected the legitimate Linux argument vector, and fixtures that hard-coded
+  `windows-*.zip` while selection compared against the running platform's suffix, so every check
+  collapsed to `invalid_artifact` (21 failures downstream of that one fixture constant).
+- Fixtures now derive the archive from `asset_suffix_for_arch(running_arch())`; a
+  `other_arch_zip()` helper supplies a provably foreign archive. Architecture-crossing tests keep
+  explicit suffixes, and the omitted-pattern test pins an explicit per-host table instead of
+  mirroring the implementation it verifies.
+- The credential-command test asserts that exactly one argument mentions the entry — the entry
+  itself — which is the property that fails when an entry is joined into a shell string.
+- Verified by running the test suite on both hosts rather than reasoning about it: Windows (fmt,
+  clippy `-D warnings`, 164 tests) and the full workspace under WSL/Linux (159 tests). The Linux run
+  also caught a second, Windows-invisible defect: a checksum fixture whose text still named the
+  literal `windows-x64.zip`.

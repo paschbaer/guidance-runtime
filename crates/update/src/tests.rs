@@ -192,16 +192,19 @@ fn raw_release(tag: &str, assets: &[&str]) -> Release {
 ///
 /// A release without a checksum is not installable, so the default fixture is
 /// a deliverable release; tests that need the broken shape use
-/// [`raw_release`].
+/// [`raw_release`]. The checksum is named after the archive it belongs to, so
+/// the fixture stays coherent on every platform.
 fn release(tag: &str, prerelease: bool, assets: &[&str]) -> Release {
-    let mut names: Vec<&str> = assets.to_vec();
-    let has_zip = names.iter().any(|name| name.ends_with(".zip"));
+    let mut names: Vec<String> = assets.iter().map(|name| (*name).to_string()).collect();
     let has_checksum = names
         .iter()
         .any(|name| name.to_ascii_lowercase().contains("sha256"));
-    if has_zip && !has_checksum {
-        names.push("windows-x64.zip.sha256");
+    if !has_checksum {
+        if let Some(zip) = names.iter().find(|name| name.ends_with(".zip")).cloned() {
+            names.push(format!("{zip}.sha256"));
+        }
     }
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut release = raw_release(tag, &names);
     release.prerelease = prerelease;
     release
@@ -216,7 +219,7 @@ fn config(channel: Channel) -> UpdateTarget {
         channel,
         install_dir: "C:/tmp/install".into(),
         service_name: Some("GuidanceRuntime".into()),
-        asset_pattern: Some("windows-x64.zip".into()),
+        asset_pattern: Some(running_zip().into()),
     }
 }
 
@@ -224,25 +227,48 @@ fn v(s: &str) -> Version {
     Version::parse(s).unwrap()
 }
 
-const ASSET: &str = "windows-x64.zip";
+/// The archive the running build selects.
+///
+/// Fixtures must name the *running* platform's archive. They used to be
+/// hard-coded Windows names, which kept a Windows-only test run green while the
+/// Linux and macOS jobs failed every check with `invalid_artifact`.
+fn running_zip() -> &'static str {
+    crate::asset_suffix_for_arch(crate::running_arch())
+        .expect("the test host platform and architecture publish an archive")
+}
+
+/// The other architecture's archive on the running platform, for fixtures that
+/// must be provably foreign to this build.
+fn other_arch_zip() -> &'static str {
+    let other = if crate::running_arch() == "aarch64" {
+        "x86_64"
+    } else {
+        "aarch64"
+    };
+    crate::asset_suffix_for(crate::Platform::running(), other)
+        .expect("both supported architectures publish an archive")
+}
+
+/// Explicit x64 and arm64 suffixes for the tests that drive [`select`] with a
+/// chosen architecture instead of the running one.
 const X64: &str = "windows-x64.zip";
 const ARM64: &str = "windows-arm64.zip";
 
 #[test]
 fn beta_channel_accepts_a_plain_release() {
-    let r = release("v1.2.0", false, &[ASSET]);
+    let r = release("v1.2.0", false, &[running_zip()]);
     assert!(is_allowed(Channel::Beta, &r, &v("1.2.0")));
 }
 
 #[test]
 fn beta_channel_accepts_a_beta_prerelease() {
-    let r = release("v1.2.0-beta.1", true, &[ASSET]);
+    let r = release("v1.2.0-beta.1", true, &[running_zip()]);
     assert!(is_allowed(Channel::Beta, &r, &v("1.2.0-beta.1")));
 }
 
 #[test]
 fn beta_channel_rejects_other_prerelease_labels() {
-    let r = release("v1.2.0-alpha.1", true, &[ASSET]);
+    let r = release("v1.2.0-alpha.1", true, &[running_zip()]);
     assert!(!is_allowed(Channel::Beta, &r, &v("1.2.0-alpha.1")));
 }
 
@@ -250,15 +276,15 @@ fn beta_channel_rejects_other_prerelease_labels() {
 fn beta_channel_rejects_a_flagged_prerelease_with_empty_pre() {
     // GitHub marks the release as prerelease, semver carries no pre-release
     // part: this is neither a published stable nor a beta build.
-    let r = release("v1.2.0", true, &[ASSET]);
+    let r = release("v1.2.0", true, &[running_zip()]);
     assert!(!is_allowed(Channel::Beta, &r, &v("1.2.0")));
 }
 
 #[test]
 fn stable_channel_accepts_only_plain_releases() {
-    let plain = release("v1.2.0", false, &[ASSET]);
-    let flagged = release("v1.2.0", true, &[ASSET]);
-    let beta = release("v1.2.0-beta.1", true, &[ASSET]);
+    let plain = release("v1.2.0", false, &[running_zip()]);
+    let flagged = release("v1.2.0", true, &[running_zip()]);
+    let beta = release("v1.2.0-beta.1", true, &[running_zip()]);
     assert!(is_allowed(Channel::Stable, &plain, &v("1.2.0")));
     assert!(!is_allowed(Channel::Stable, &flagged, &v("1.2.0")));
     assert!(!is_allowed(Channel::Stable, &beta, &v("1.2.0-beta.1")));
@@ -267,16 +293,16 @@ fn stable_channel_accepts_only_plain_releases() {
 #[test]
 fn selection_picks_the_highest_allowed_version() {
     let releases = vec![
-        release("v1.1.0", false, &[ASSET]),
-        release("v1.3.0", false, &[ASSET]),
-        release("v1.2.0", false, &[ASSET]),
+        release("v1.1.0", false, &[running_zip()]),
+        release("v1.3.0", false, &[running_zip()]),
+        release("v1.2.0", false, &[running_zip()]),
     ];
     let picked = select(
         "owner/repo",
         Channel::Stable,
         &v("1.0.0"),
-        ASSET,
-        ASSET,
+        running_zip(),
+        running_zip(),
         releases,
     )
     .unwrap();
@@ -285,13 +311,13 @@ fn selection_picks_the_highest_allowed_version() {
 
 #[test]
 fn selection_ignores_versions_not_above_current() {
-    let releases = vec![release("v1.0.0", false, &[ASSET])];
+    let releases = vec![release("v1.0.0", false, &[running_zip()])];
     assert!(select(
         "owner/repo",
         Channel::Stable,
         &v("1.0.0"),
-        ASSET,
-        ASSET,
+        running_zip(),
+        running_zip(),
         releases
     )
     .is_none());
@@ -304,8 +330,8 @@ fn selection_requires_a_matching_asset() {
         "owner/repo",
         Channel::Stable,
         &v("1.0.0"),
-        ASSET,
-        ASSET,
+        running_zip(),
+        running_zip(),
         releases
     )
     .is_none());
@@ -313,13 +339,13 @@ fn selection_requires_a_matching_asset() {
 
 #[test]
 fn selection_attaches_the_checksum_url_when_present() {
-    let releases = vec![release("v2.0.0", false, &[ASSET, "windows-x64.zip.sha256"])];
+    let releases = vec![release("v2.0.0", false, &[running_zip()])];
     let picked = select(
         "owner/repo",
         Channel::Stable,
         &v("1.0.0"),
-        ASSET,
-        ASSET,
+        running_zip(),
+        running_zip(),
         releases,
     )
     .unwrap();
@@ -338,13 +364,13 @@ fn selection_attaches_the_checksum_url_when_present() {
 /// than a choice.
 #[test]
 fn selection_resolves_the_archive_to_the_authenticated_endpoint() {
-    let releases = vec![release("v2.0.0", false, &[ASSET])];
+    let releases = vec![release("v2.0.0", false, &[running_zip()])];
     let picked = select(
         "owner/repo",
         Channel::Stable,
         &v("1.0.0"),
-        ASSET,
-        ASSET,
+        running_zip(),
+        running_zip(),
         releases,
     )
     .unwrap();
@@ -360,32 +386,34 @@ fn selection_resolves_the_archive_to_the_authenticated_endpoint() {
 
 #[test]
 fn checksum_parsing_prefers_the_asset_line() {
-    let text = "aaaa  other.zip\nbbbb  windows-x64.zip\n";
-    assert_eq!(parse_checksum(text, ASSET).as_deref(), Some("bbbb"));
+    let text = format!("aaaa  other.zip\nbbbb  {}\n", running_zip());
+    assert_eq!(
+        parse_checksum(&text, running_zip()).as_deref(),
+        Some("bbbb")
+    );
 }
 
 #[test]
 fn checksum_parsing_falls_back_to_the_first_line() {
     let text = "cccc\n";
-    assert_eq!(parse_checksum(text, ASSET).as_deref(), Some("cccc"));
+    assert_eq!(parse_checksum(text, running_zip()).as_deref(), Some("cccc"));
 }
 
 #[test]
 fn checksum_parsing_lowercases() {
-    assert_eq!(parse_checksum("DDDD", ASSET).as_deref(), Some("dddd"));
+    assert_eq!(
+        parse_checksum("DDDD", running_zip()).as_deref(),
+        Some("dddd")
+    );
 }
 
 #[test]
 fn checksum_parsing_of_empty_text_is_none() {
-    assert!(parse_checksum("", ASSET).is_none());
+    assert!(parse_checksum("", running_zip()).is_none());
 }
 
 async fn verified(payload: &[u8], checksum_text: &str) -> Result<Vec<u8>> {
-    let source = FixedReleases(vec![release(
-        "v2.0.0",
-        false,
-        &[ASSET, "windows-x64.zip.sha256"],
-    )]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let update = check_with(&source, &config(Channel::Stable), None, &v("1.0.0"))
         .await?
         .unwrap();
@@ -413,7 +441,7 @@ async fn download_refuses_an_update_without_checksum_asset() {
         version: v("2.0.0"),
         tag: "v2.0.0".into(),
         channel: Channel::Stable,
-        asset_name: ASSET.into(),
+        asset_name: running_zip().into(),
         download_url: crate::asset_endpoint("owner/repo", 1000),
         checksum_url: None,
     };
@@ -431,11 +459,7 @@ async fn download_refuses_an_update_without_checksum_asset() {
 async fn an_authenticated_download_attaches_the_token_to_both_assets() {
     let payload = b"payload";
     let digest = crate::params::sha256_hex(payload);
-    let source = FixedReleases(vec![release(
-        "v2.0.0",
-        false,
-        &[ASSET, "windows-x64.zip.sha256"],
-    )]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let update = check_with(&source, &config(Channel::Stable), None, &v("1.0.0"))
         .await
         .unwrap()
@@ -466,9 +490,9 @@ async fn an_authenticated_download_attaches_the_token_to_both_assets() {
 #[tokio::test]
 async fn check_with_returns_the_newest_allowed_release() {
     let source = FixedReleases(vec![
-        release("v1.5.0", false, &[ASSET]),
-        release("v1.9.0-beta.1", true, &[ASSET]),
-        release("v1.7.0", false, &[ASSET]),
+        release("v1.5.0", false, &[running_zip()]),
+        release("v1.9.0-beta.1", true, &[running_zip()]),
+        release("v1.7.0", false, &[running_zip()]),
     ]);
     let stable = check_with(&source, &config(Channel::Stable), None, &v("1.0.0"))
         .await
@@ -627,14 +651,17 @@ fn an_omitted_pattern_derives_from_the_running_architecture() {
         asset_pattern: None,
         ..config(Channel::Stable)
     };
-    // Pinned literally per target so the test cannot pass by mirroring the
-    // implementation it is meant to verify.
-    let expected = if cfg!(target_arch = "x86_64") {
-        X64
-    } else if cfg!(target_arch = "aarch64") {
-        ARM64
-    } else {
-        panic!("test host architecture is not part of the mapping")
+    // Pinned as an explicit host table rather than derived from
+    // `asset_suffix_for_arch`, so the test cannot pass by mirroring the
+    // implementation it verifies — and so it is meaningful on every CI host.
+    let expected = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => "windows-x64.zip",
+        ("windows", "aarch64") => "windows-arm64.zip",
+        ("macos", "x86_64") => "macos-x86_64.zip",
+        ("macos", "aarch64") => "macos-aarch64.zip",
+        ("linux", "x86_64") => "linux-x86_64.zip",
+        ("linux", "aarch64") => "linux-aarch64.zip",
+        (os, arch) => panic!("test host {os}/{arch} is not part of the mapping"),
     };
     assert_eq!(cfg.resolved_asset_pattern().unwrap(), expected);
 }
@@ -728,7 +755,7 @@ fn target(name: &str, visibility: Visibility) -> UpdateTarget {
         channel: Channel::Stable,
         install_dir: format!("/tmp/{name}").into(),
         service_name: None,
-        asset_pattern: Some("windows-x64.zip".into()),
+        asset_pattern: Some(running_zip().into()),
     }
 }
 
@@ -756,7 +783,7 @@ fn runtime_target_named(name: &str, visibility: Visibility) -> UpdateTarget {
         channel: Channel::Stable,
         install_dir: format!("/tmp/{name}").into(),
         service_name: Some("GuidanceRuntime".into()),
-        asset_pattern: Some("windows-x64.zip".into()),
+        asset_pattern: Some(running_zip().into()),
     }
 }
 
@@ -780,7 +807,7 @@ fn runtime_target_with_marker(
 /// the first one fails, and the run reports one result per target.
 #[tokio::test]
 async fn check_all_reports_one_result_per_target_and_isolates_failures() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let cfg = cfg_of(vec![
         runtime_target(Visibility::Public),
         target("second-target", Visibility::Public),
@@ -801,7 +828,7 @@ async fn check_all_reports_one_result_per_target_and_isolates_failures() {
 /// never claims the running crate version as its installed version.
 #[tokio::test]
 async fn a_foreign_target_is_not_installed_and_carries_no_version() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let cfg = cfg_of(vec![target("guidance", Visibility::Public)]);
 
     let store = FixedCredentialStore(None);
@@ -822,7 +849,7 @@ async fn a_foreign_target_is_not_installed_and_carries_no_version() {
 /// covered no longer exists.
 #[tokio::test]
 async fn a_private_target_reports_inaccessible_with_the_verbatim_phrase() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let cfg = cfg_of(vec![runtime_target(Visibility::Private)]);
 
     let store = FixedCredentialStore(None);
@@ -846,7 +873,7 @@ async fn a_private_target_reports_inaccessible_with_the_verbatim_phrase() {
 /// proving the fan-out wires selection through to the aggregate.
 #[tokio::test]
 async fn a_public_target_with_a_newer_release_reports_update_available() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let (target, _dir) =
         runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Public, "1.0.0");
     let cfg = cfg_of(vec![target]);
@@ -863,7 +890,7 @@ async fn a_public_target_with_a_newer_release_reports_update_available() {
 /// No newer release means up to date, which is distinct from inaccessible.
 #[tokio::test]
 async fn a_public_target_with_no_newer_release_is_up_to_date() {
-    let source = FixedReleases(vec![release("v1.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v1.0.0", false, &[running_zip()])]);
     let (target, _dir) =
         runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Public, "1.0.0");
     let cfg = cfg_of(vec![target]);
@@ -879,7 +906,7 @@ async fn a_public_target_with_no_newer_release_is_up_to_date() {
 /// problem while another is perfectly fine.
 #[tokio::test]
 async fn a_run_with_a_mixed_outcome_exits_two() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let (public, _public_dir) =
         runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Public, "1.0.0");
     let (private, _private_dir) =
@@ -904,7 +931,10 @@ async fn an_unreachable_first_source_does_not_stop_the_second() {
     let mut healthy = runtime_target_named("second-runtime", Visibility::Public);
     healthy.repository = "healthy/repo".into();
 
-    let source = FailingFor("broken/repo", vec![release("v2.0.0", false, &[X64])]);
+    let source = FailingFor(
+        "broken/repo",
+        vec![release("v2.0.0", false, &[running_zip()])],
+    );
     let cfg = cfg_of(vec![failing, healthy]);
 
     let store = FixedCredentialStore(None);
@@ -969,14 +999,14 @@ async fn a_legacy_flat_configuration_produces_the_historical_outcome() {
     );
 
     // Up to date: the exact pre-change wording, including the channel name.
-    let source = FixedReleases(vec![release("v1.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v1.0.0", false, &[running_zip()])]);
     let outcome = crate::check_update_with(&source, only, None, &v("1.0.0"))
         .await
         .unwrap();
     assert_eq!(outcome.message(), "No update available on stable channel");
 
     // Update available: the exact pre-change wording for the other branch.
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let outcome = crate::check_update_with(&source, only, None, &v("1.0.0"))
         .await
         .unwrap();
@@ -1008,7 +1038,7 @@ async fn a_legacy_source_failure_remains_an_error() {
 /// stable-only assertion would not catch drift on the beta branch.
 #[tokio::test]
 async fn the_historical_beta_wording_is_unchanged() {
-    let source = FixedReleases(vec![release("v1.3.0-beta.10", true, &[ASSET])]);
+    let source = FixedReleases(vec![release("v1.3.0-beta.10", true, &[running_zip()])]);
     let outcome = crate::check_update_with(&source, &config(Channel::Beta), None, &v("1.1.0"))
         .await
         .unwrap();
@@ -1023,7 +1053,7 @@ async fn the_historical_beta_wording_is_unchanged() {
 /// success (and 1 on a source failure, which never reaches this conversion).
 #[tokio::test]
 async fn a_legacy_outcome_becomes_a_one_element_document() {
-    let source = FixedReleases(vec![release("v1.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v1.0.0", false, &[running_zip()])]);
     let outcome = crate::check_update_with(&source, &config(Channel::Stable), None, &v("1.0.0"))
         .await
         .unwrap();
@@ -1043,7 +1073,7 @@ async fn a_legacy_outcome_becomes_a_one_element_document() {
 /// The available branch of the same conversion carries both versions.
 #[tokio::test]
 async fn a_legacy_available_outcome_names_installed_and_offered_versions() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let outcome = crate::check_update_with(&source, &config(Channel::Stable), None, &v("1.0.0"))
         .await
         .unwrap();
@@ -1128,7 +1158,7 @@ fn private_runtime_target() -> UpdateTarget {
 /// the credential actually reaches the source adapter.
 #[tokio::test]
 async fn a_private_target_with_a_credential_reports_its_real_state() {
-    let (source, seen) = RecordingReleases::new(vec![release("v2.0.0", false, &[X64])]);
+    let (source, seen) = RecordingReleases::new(vec![release("v2.0.0", false, &[running_zip()])]);
     let store = FixedCredentialStore(Some(Secret::new("ghp_valid")));
     let (target, _dir) =
         runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Private, "1.0.0");
@@ -1149,7 +1179,7 @@ async fn a_private_target_with_a_credential_reports_its_real_state() {
 /// double panics if it is touched, so this fails loudly if that changes.
 #[tokio::test]
 async fn a_public_target_never_consults_the_credential_store() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let store = NoCredentialStore;
     let (target, _dir) =
         runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Public, "1.0.0");
@@ -1163,7 +1193,7 @@ async fn a_public_target_never_consults_the_credential_store() {
 /// A public target sends no token even when a store would supply one.
 #[tokio::test]
 async fn a_public_target_sends_no_token() {
-    let (source, seen) = RecordingReleases::new(vec![release("v2.0.0", false, &[X64])]);
+    let (source, seen) = RecordingReleases::new(vec![release("v2.0.0", false, &[running_zip()])]);
     let store = FixedCredentialStore(Some(Secret::new("ghp_must_not_be_used")));
     let cfg = cfg_of(vec![runtime_target(Visibility::Public)]);
 
@@ -1180,7 +1210,7 @@ async fn a_public_target_sends_no_token() {
 /// carrying the verbatim phrase.
 #[tokio::test]
 async fn an_absent_credential_reports_inaccessible_with_the_phrase() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let store = FixedCredentialStore(None);
     let cfg = cfg_of(vec![private_runtime_target()]);
 
@@ -1200,7 +1230,7 @@ async fn an_absent_credential_reports_inaccessible_with_the_phrase() {
 /// remedy differs.
 #[tokio::test]
 async fn an_unusable_store_reports_credential_store_unavailable() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let store = UnavailableCredentialStore;
     let cfg = cfg_of(vec![private_runtime_target()]);
 
@@ -1220,7 +1250,7 @@ async fn an_unusable_store_reports_credential_store_unavailable() {
 /// provisioned access actually hits.
 #[tokio::test]
 async fn access_problems_win_over_not_installed() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let store = FixedCredentialStore(None);
     // A foreign name means no installed version is known for it.
     let mut target = private_runtime_target();
@@ -1287,7 +1317,7 @@ async fn a_refusal_reaching_check_all_is_inaccessible_not_a_network_error() {
 /// provisioned", and conflating them is what the review flagged.
 #[tokio::test]
 async fn an_absent_credential_names_the_entry_and_the_step() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let store = FixedCredentialStore(None);
     let cfg = cfg_of(vec![private_runtime_target()]);
 
@@ -1548,7 +1578,7 @@ fn the_clock_based_document_carries_a_parseable_rfc3339_timestamp() {
 async fn no_rendering_path_contains_the_credential_value() {
     const SENTINEL: &str = "ghp_sentinel_do_not_render";
 
-    let (source, seen) = RecordingReleases::new(vec![release("v2.0.0", false, &[X64])]);
+    let (source, seen) = RecordingReleases::new(vec![release("v2.0.0", false, &[running_zip()])]);
     let store = FixedCredentialStore(Some(Secret::new(SENTINEL)));
     let cfg = cfg_of(vec![private_runtime_target()]);
     let run = crate::check_all(&source, &store, &cfg, &v("1.0.0")).await;
@@ -1644,7 +1674,7 @@ fn a_marker_for_another_target_yields_no_version() {
 /// what replaces the old name heuristic.
 #[tokio::test]
 async fn a_marker_is_the_installed_version_for_a_foreign_target() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let (target, _dir) = runtime_target_with_marker("guidance", Visibility::Public, "1.0.0");
     let run = crate::check_all(
         &source,
@@ -1660,7 +1690,7 @@ async fn a_marker_is_the_installed_version_for_a_foreign_target() {
 
 #[tokio::test]
 async fn a_target_without_a_marker_is_not_installed() {
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let run = crate::check_all(
         &source,
         &FixedCredentialStore(None),
@@ -1698,7 +1728,7 @@ async fn an_unmarked_runtime_installation_still_reports_the_running_version() {
         "the fixture must have no marker"
     );
 
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let run = crate::check_all(
         &source,
         &FixedCredentialStore(None),
@@ -1720,7 +1750,7 @@ async fn the_transitional_rule_does_not_apply_to_a_foreign_target() {
     let mut target = runtime_target_named("guidance", Visibility::Public);
     target.install_dir = dir.path().to_path_buf();
 
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let run = crate::check_all(
         &source,
         &FixedCredentialStore(None),
@@ -1765,7 +1795,7 @@ async fn an_all_failing_run_exits_two() {
 async fn the_marker_version_decides_availability_not_the_running_version() {
     // Installed 2.0.0, newest release 1.5.0, running 1.0.0: not an update.
     let (target, _dir) = runtime_target_with_marker("guidance", Visibility::Public, "2.0.0");
-    let source = FixedReleases(vec![release("v1.5.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v1.5.0", false, &[running_zip()])]);
     let run = crate::check_all(
         &source,
         &FixedCredentialStore(None),
@@ -1778,7 +1808,7 @@ async fn the_marker_version_decides_availability_not_the_running_version() {
 
     // Installed 1.0.0, newest release 2.0.0, running 5.0.0: is an update.
     let (target, _dir) = runtime_target_with_marker("guidance", Visibility::Public, "1.0.0");
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let run = crate::check_all(
         &source,
         &FixedCredentialStore(None),
@@ -1791,7 +1821,7 @@ async fn the_marker_version_decides_availability_not_the_running_version() {
 
     // Installed exactly the newest release: not an update.
     let (target, _dir) = runtime_target_with_marker("guidance", Visibility::Public, "3.0.0");
-    let source = FixedReleases(vec![release("v3.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v3.0.0", false, &[running_zip()])]);
     let run = crate::check_all(
         &source,
         &FixedCredentialStore(None),
@@ -1812,7 +1842,7 @@ async fn an_unreadable_marker_on_the_runtime_target_is_not_installed() {
     let mut target = runtime_target(Visibility::Public);
     target.install_dir = dir.path().to_path_buf();
 
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let run = crate::check_all(
         &source,
         &FixedCredentialStore(None),
@@ -1835,7 +1865,7 @@ async fn a_mismatched_marker_on_the_runtime_target_is_not_installed() {
     let mut target = runtime_target(Visibility::Public);
     target.install_dir = dir.path().to_path_buf();
 
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let run = crate::check_all(
         &source,
         &FixedCredentialStore(None),
@@ -1862,7 +1892,7 @@ async fn a_stale_non_service_binary_does_not_mark_a_legacy_installation() {
     let mut target = runtime_target(Visibility::Public);
     target.install_dir = dir.path().to_path_buf();
 
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let run = crate::check_all(
         &source,
         &FixedCredentialStore(None),
@@ -1928,7 +1958,7 @@ async fn a_legacy_check_uses_the_marker_when_one_exists() {
     crate::marker::write(dir.path(), crate::LEGACY_TARGET_NAME, "2.0.0").unwrap();
     let mut target = config(Channel::Stable);
     target.install_dir = dir.path().to_path_buf();
-    let source = FixedReleases(vec![release("v1.5.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v1.5.0", false, &[running_zip()])]);
     let outcome = crate::check_update_with(&source, &target, None, &v("1.0.0"))
         .await
         .unwrap();
@@ -1938,7 +1968,7 @@ async fn a_legacy_check_uses_the_marker_when_one_exists() {
     crate::marker::write(dir.path(), crate::LEGACY_TARGET_NAME, "1.0.0").unwrap();
     let mut target = config(Channel::Stable);
     target.install_dir = dir.path().to_path_buf();
-    let source = FixedReleases(vec![release("v2.0.0", false, &[X64])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[running_zip()])]);
     let outcome = crate::check_update_with(&source, &target, None, &v("5.0.0"))
         .await
         .unwrap();
@@ -1958,11 +1988,7 @@ fn the_marker_writer_rejects_a_non_semver_version() {
 // --- install orchestration (US4) -------------------------------------------
 
 fn update_source() -> FixedReleases {
-    FixedReleases(vec![release(
-        "v2.0.0",
-        false,
-        &[ASSET, "windows-x64.zip.sha256"],
-    )])
+    FixedReleases(vec![release("v2.0.0", false, &[running_zip()])])
 }
 
 fn matching_downloader(payload: &[u8]) -> FixedDownloader {
@@ -2168,7 +2194,7 @@ async fn install_all_does_not_install_when_the_checksum_fails() {
 async fn a_release_without_a_matching_artifact_is_invalid_artifact() {
     let (target, _dir) =
         runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Public, "1.0.0");
-    let source = FixedReleases(vec![release("v2.0.0", false, &["linux-x86_64.zip"])]);
+    let source = FixedReleases(vec![release("v2.0.0", false, &[other_arch_zip()])]);
     let run = crate::check_all(
         &source,
         &FixedCredentialStore(None),
@@ -2197,7 +2223,7 @@ async fn a_release_without_a_matching_artifact_is_invalid_artifact() {
 async fn a_release_without_a_checksum_is_invalid_artifact() {
     let (target, _dir) =
         runtime_target_with_marker(crate::LEGACY_TARGET_NAME, Visibility::Public, "1.0.0");
-    let source = FixedReleases(vec![raw_release("v2.0.0", &[X64])]);
+    let source = FixedReleases(vec![raw_release("v2.0.0", &[running_zip()])]);
     let run = crate::check_all(
         &source,
         &FixedCredentialStore(None),
@@ -2232,7 +2258,7 @@ async fn install_all_refuses_an_unverifiable_release_without_installing() {
     };
 
     let run = crate::install_all(
-        &FixedReleases(vec![raw_release("v2.0.0", &[X64])]),
+        &FixedReleases(vec![raw_release("v2.0.0", &[running_zip()])]),
         &matching_downloader(b"payload"),
         &installer,
         &NoCredentialStore,

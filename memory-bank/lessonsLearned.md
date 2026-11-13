@@ -96,6 +96,31 @@ For every lesson, include:
   `scripts/verify-arch.ps1`
 - **Status:** Validated
 
+### Test fixtures that name a platform artefact rot the other CI legs
+
+- **Date:** 2026-11-13
+- **Context:** Closing out feature 001, whose new `ubuntu-latest` leg ran the `guidance-update`
+  suite for the first time.
+- **Observation:** 23 of 142 tests failed on Linux while the same suite was green on Windows. 21 of
+  them were one cause: fixtures hard-coded `windows-x64.zip` while selection compares against
+  `asset_suffix_for_arch(running_arch())`, so every check collapsed to `invalid_artifact`. The
+  remaining two were an over-strict credential-command assertion (it rejected the legitimate Linux
+  argv) and an omitted-pattern test that pinned a Windows literal.
+- **Root cause:** The fixtures encoded a host assumption that the production code had already been
+  generalized away from. A suite that is only ever executed on one OS cannot distinguish "the code
+  is portable" from "the fixtures agree with this host".
+- **Lesson:** When production code becomes platform- or architecture-aware, the *fixtures* are part
+  of that change: a fixture that names a concrete platform artefact is a bug waiting for the first
+  foreign CI leg. Assert the property ("the running archive") rather than a literal, and keep
+  literals only where the test deliberately drives a foreign value.
+- **Action:** Derive such fixtures from the same public helper the code uses, and prove it by
+  executing the suite on the other OS — under WSL if no native host exists — instead of reasoning
+  about it. That run caught a second Windows-invisible defect (a checksum fixture whose text still
+  named `windows-x64.zip`).
+- **Evidence:** `crates/update/src/tests.rs` (`running_zip`, `other_arch_zip`),
+  `crates/update/src/credentials.rs`, `.github/workflows/ci.yml`
+- **Status:** Validated
+
 ## Proposed Lessons
 
 None proposed.
