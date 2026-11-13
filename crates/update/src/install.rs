@@ -36,6 +36,7 @@ impl Installer for ZipInstaller {
 }
 
 #[allow(unused_variables)]
+#[cfg(windows)]
 fn install_archive(target: &UpdateTarget, version: &Version, bytes: &[u8]) -> Result<()> {
     #[cfg(not(windows))]
     {
@@ -43,12 +44,53 @@ fn install_archive(target: &UpdateTarget, version: &Version, bytes: &[u8]) -> Re
     }
     #[cfg(windows)]
     {
-        install_on_windows(target, version, bytes)
+        let control = ScControl::with_settle(std::time::Duration::from_secs(2));
+        install_on_windows(target, version, bytes, &control)
+    }
+}
+
+/// Service control for the install transaction. The real adapter shells out to
+/// `sc.exe`; tests substitute a recording fake so no real service is touched.
+#[cfg(windows)]
+trait ServiceControl {
+    fn stop(&self, name: &str) -> Result<()>;
+    fn start(&self, name: &str) -> Result<()>;
+}
+
+/// The production adapter. It owns the settle delay: after `sc.exe stop` the
+/// service manager needs a moment before the files are actually unlocked.
+#[cfg(windows)]
+struct ScControl {
+    settle: std::time::Duration,
+}
+
+#[cfg(windows)]
+impl ScControl {
+    fn with_settle(settle: std::time::Duration) -> Self {
+        Self { settle }
     }
 }
 
 #[cfg(windows)]
-fn install_on_windows(target: &UpdateTarget, version: &Version, bytes: &[u8]) -> Result<()> {
+impl ServiceControl for ScControl {
+    fn stop(&self, name: &str) -> Result<()> {
+        run_sc("stop", name)?;
+        std::thread::sleep(self.settle);
+        Ok(())
+    }
+
+    fn start(&self, name: &str) -> Result<()> {
+        run_sc("start", name)
+    }
+}
+
+#[cfg(windows)]
+fn install_on_windows(
+    target: &UpdateTarget,
+    version: &Version,
+    bytes: &[u8],
+    control: &dyn ServiceControl,
+) -> Result<()> {
     let staging = tempfile::tempdir()?;
     extract(bytes, staging.path())?;
 
@@ -72,8 +114,7 @@ fn install_on_windows(target: &UpdateTarget, version: &Version, bytes: &[u8]) ->
     let backup = backup_path(&target.install_dir);
 
     if let Some(service) = service {
-        run_sc("stop", service)?;
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        control.stop(service)?;
     }
 
     // Paths this transaction creates (rather than overwrites) are recorded so
@@ -102,13 +143,19 @@ fn install_on_windows(target: &UpdateTarget, version: &Version, bytes: &[u8]) ->
     })();
 
     if let Err(e) = replacement {
-        restore(&backup, &target.install_dir, service, &created);
+        restore(&backup, &target.install_dir, service, &created, control);
         return Err(e);
     }
 
     if let Some(service) = service {
-        if let Err(e) = run_sc("start", service) {
-            restore(&backup, &target.install_dir, Some(service), &created);
+        if let Err(e) = control.start(service) {
+            restore(
+                &backup,
+                &target.install_dir,
+                Some(service),
+                &created,
+                control,
+            );
             return Err(e);
         }
     }
@@ -117,7 +164,7 @@ fn install_on_windows(target: &UpdateTarget, version: &Version, bytes: &[u8]) ->
     // previous installation so the marker never claims a version that is not
     // fully in place.
     if let Err(e) = crate::marker::write(&target.install_dir, &target.name, &version.to_string()) {
-        restore(&backup, &target.install_dir, service, &created);
+        restore(&backup, &target.install_dir, service, &created, control);
         return Err(e);
     }
     Ok(())
@@ -268,9 +315,15 @@ pub(crate) fn backup_path(install_dir: &Path) -> PathBuf {
 /// fails, and a restore that silently does nothing would report failure while
 /// the new binaries stay live.
 #[cfg(windows)]
-fn restore(backup: &Path, install_dir: &Path, service: Option<&str>, created: &[PathBuf]) {
+fn restore(
+    backup: &Path,
+    install_dir: &Path,
+    service: Option<&str>,
+    created: &[PathBuf],
+    control: &dyn ServiceControl,
+) {
     if let Some(service) = service {
-        let _ = run_sc("stop", service);
+        let _ = control.stop(service);
     }
     if backup.exists() {
         let _ = copy_dir(backup, install_dir);
@@ -290,7 +343,7 @@ fn restore(backup: &Path, install_dir: &Path, service: Option<&str>, created: &[
         }
     }
     if let Some(service) = service {
-        let _ = run_sc("start", service);
+        let _ = control.start(service);
     }
 }
 
@@ -562,6 +615,185 @@ mod tests {
             crate::marker::read_version(&install_dir, "guidance").as_deref(),
             Some("1.0.0"),
             "a failed install must not claim the new version"
+        );
+    }
+
+    /// A recording service-control fake: every successful call is appended to
+    /// `calls`; an attempt matching `fail_on` fails once (the failure is not
+    /// recorded) and later attempts succeed. It has
+    /// no settle delay, so service-driven tests stay fast.
+    #[cfg(windows)]
+    struct RecordingControl {
+        calls: std::cell::RefCell<Vec<&'static str>>,
+        fail_on: Option<&'static str>,
+        failed: std::cell::Cell<bool>,
+    }
+
+    #[cfg(windows)]
+    impl RecordingControl {
+        fn recording() -> Self {
+            Self {
+                calls: std::cell::RefCell::new(Vec::new()),
+                fail_on: None,
+                failed: std::cell::Cell::new(false),
+            }
+        }
+
+        fn failing_on(action: &'static str) -> Self {
+            Self {
+                calls: std::cell::RefCell::new(Vec::new()),
+                fail_on: Some(action),
+                failed: std::cell::Cell::new(false),
+            }
+        }
+
+        /// Fails the first attempt of `self.fail_on`, then recovers.
+        fn attempt(&self, action: &'static str) -> Result<()> {
+            if self.fail_on == Some(action) && !self.failed.get() {
+                self.failed.set(true);
+                bail!("fake {action} failure")
+            }
+            self.calls.borrow_mut().push(action);
+            Ok(())
+        }
+    }
+
+    #[cfg(windows)]
+    impl ServiceControl for RecordingControl {
+        fn stop(&self, _name: &str) -> Result<()> {
+            self.attempt("stop")
+        }
+
+        fn start(&self, _name: &str) -> Result<()> {
+            self.attempt("start")
+        }
+    }
+
+    #[cfg(windows)]
+    fn served_target(install_dir: &std::path::Path) -> UpdateTarget {
+        let mut target = config();
+        target.install_dir = install_dir.to_path_buf();
+        target
+    }
+
+    /// The service-bearing happy path: stop before replacement, start after,
+    /// marker written last — and nothing else.
+    #[cfg(windows)]
+    #[test]
+    fn a_served_target_stops_replaces_and_starts() {
+        let root = tempfile::tempdir().unwrap();
+        let install_dir = root.path().join("install");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        std::fs::write(install_dir.join("guidance.exe"), b"old").unwrap();
+
+        let control = RecordingControl::recording();
+        let target = served_target(&install_dir);
+        let bytes = zip_bytes(&[
+            ("bin/guidance.exe", b"new"),
+            ("bin/guidance-service.exe", b"svc"),
+            ("bin/created/new-file.txt", b"created"),
+        ]);
+
+        install_on_windows(&target, &version(), &bytes, &control).unwrap();
+
+        assert_eq!(*control.calls.borrow(), vec!["stop", "start"]);
+        assert_eq!(
+            std::fs::read(install_dir.join("guidance.exe")).unwrap(),
+            b"new"
+        );
+        assert_eq!(
+            crate::marker::read_version(&install_dir, "guidance-runtime").as_deref(),
+            Some("2.0.0")
+        );
+    }
+
+    /// A start failure after the replacement must roll back completely: old
+    /// files restored, files the archive created removed, marker untouched,
+    /// and the service stopped again before the restore.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_start_restores_the_old_state_and_stops_before_restoring() {
+        let root = tempfile::tempdir().unwrap();
+        let install_dir = root.path().join("install");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        std::fs::write(install_dir.join("old.txt"), b"old").unwrap();
+        crate::marker::write(&install_dir, "guidance-runtime", "1.0.0").unwrap();
+
+        let control = RecordingControl::failing_on("start");
+        let target = served_target(&install_dir);
+        let bytes = zip_bytes(&[
+            ("bin/guidance-service.exe", b"svc"),
+            ("bin/old.txt", b"new"),
+            ("bin/created.txt", b"created"),
+        ]);
+
+        install_on_windows(&target, &version(), &bytes, &control).unwrap_err();
+
+        assert_eq!(
+            *control.calls.borrow(),
+            vec!["stop", "stop", "start"],
+            "install stop, rollback stop, rollback start — in that order"
+        );
+        assert_eq!(std::fs::read(install_dir.join("old.txt")).unwrap(), b"old");
+        assert!(
+            !install_dir.join("created.txt").exists(),
+            "files the rejected archive created must be removed"
+        );
+        assert_eq!(
+            crate::marker::read_version(&install_dir, "guidance-runtime").as_deref(),
+            Some("1.0.0"),
+            "the start never succeeded, so the marker must stay at the old version"
+        );
+    }
+
+    /// A stop failure aborts before the transaction touches anything: the
+    /// install directory stays byte-identical, no backup appears, and no
+    /// start is attempted.
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_stop_aborts_before_touching_the_installation() {
+        let root = tempfile::tempdir().unwrap();
+        let install_dir = root.path().join("install");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        std::fs::write(install_dir.join("old.txt"), b"old").unwrap();
+
+        let control = RecordingControl::failing_on("stop");
+        let target = served_target(&install_dir);
+        let bytes = zip_bytes(&[("old.txt", b"new")]);
+
+        install_on_windows(&target, &version(), &bytes, &control).unwrap_err();
+
+        assert_eq!(*control.calls.borrow(), Vec::<&str>::new());
+        assert_eq!(std::fs::read(install_dir.join("old.txt")).unwrap(), b"old");
+        assert_eq!(
+            std::fs::read_dir(&install_dir).unwrap().count(),
+            1,
+            "the install directory must be byte-identical"
+        );
+        assert!(!backup_path(&install_dir).exists());
+    }
+
+    /// The 2 s settle delay belongs to the real adapter, not to the
+    /// transaction: a fake-driven install must complete well under it.
+    #[cfg(windows)]
+    #[test]
+    fn a_fake_driven_install_does_not_incur_the_settle_delay() {
+        let root = tempfile::tempdir().unwrap();
+        let install_dir = root.path().join("install");
+        std::fs::create_dir_all(&install_dir).unwrap();
+
+        let control = RecordingControl::recording();
+        let target = served_target(&install_dir);
+        let bytes = zip_bytes(&[
+            ("bin/guidance.exe", b"new"),
+            ("bin/guidance-service.exe", b"svc"),
+        ]);
+
+        let start = std::time::Instant::now();
+        install_on_windows(&target, &version(), &bytes, &control).unwrap();
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(1),
+            "the test fake must not sleep for the production settle delay"
         );
     }
 }
