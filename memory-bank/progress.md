@@ -58,6 +58,7 @@ None — see Change Log.
       exit 0, exit 2 stays reserved for target failures (contract `update-cli.md` §2). Pinned by
       `crates/cli/tests/exit_codes.rs` and `crates/updater/tests/exit_codes.rs`.
 - [ ] Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
+      → Resolved 2026-11-13: removed (Option A, commit `fa490cd` on `feature/json-flag-resolution`).
 - [ ] Add macOS/Linux release legs once non-Windows artifacts are published.
 
 ## Known Issues

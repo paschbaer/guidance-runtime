@@ -134,12 +134,15 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
 
 ## Next Actions
 
-1. Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
+1. ~~Wire or remove the global `--json` flag~~ — done 2026-11-13: removed (Option A, commit
+   `fa490cd` on `feature/json-flag-resolution`); IPC output is always pretty; a usage-error test
+   pins the removal. The stale exit-code bullet in `IMPLEMENTATION_STATUS.md` was fixed too.
 2. Restart the Guidance server so the final `.guidance/` state is snapshotted.
 3. Re-bless `.guidance/state/final-review.json` (`headCommit`) after the next commit that changes
    code, before re-running the completion gate.
-4. Confirm CI is green on all three legs for `4b83ea0` — the Linux build restoration (`8f13b4b`)
-   was verified only by static analysis locally.
+4. ~~Confirm CI is green on all three legs for `4b83ea0`~~ — confirmed 2026-11-13: `ci` green on
+   windows/ubuntu/macos for `4b83ea0` and `448a32c`; `Runtime CI` and `Runtime Release` green.
+5. Merge and push `feature/json-flag-resolution` (operator approval pending).
 
 ## Last Updated
 
