@@ -97,17 +97,6 @@ For every tracked follow-up, include:
 - **Origin:** Session 2026-11-12 (independent review of the arch-aware selection).
 - **Status:** Open
 
-### RW-009 — Amendment approver role is undesignated
-
-- **Finding:** Constitution v1.0.0 was ratified on 2026-11-12, but the repository named neither a
-  project owner nor the role that approves amendments to the constitution.
-- **Trigger point:** The first proposed amendment to `.specify/memory/constitution.md`.
-- **Action:** Partially handled — the project owner is recorded as "User" in `projectBrief.md`
-  (2026-11-13). Remaining: designate the role that approves amendments and record it in the
-  Governance section of `.specify/memory/constitution.md`.
-- **Origin:** Session 2026-11-12 (`speckit-constitution`, constitution v1.0.0).
-- **Status:** Open
-
 ## Handled Follow-Ups
 
 ### RW-003 — Temporary debug steps in CI
@@ -132,6 +121,17 @@ For every tracked follow-up, include:
   `guidance-update` fixtures themselves hard-coded `windows-*.zip` and are now derived.
 - **Origin:** Session 2026-11-12 (independent review of the arch-aware selection); re-checked and
   closed 2026-11-13 while fixing the cross-platform fixtures.
+- **Status:** Handled
+
+### RW-009 — Amendment approver role is undesignated
+
+- **Finding:** Constitution v1.0.0 was ratified on 2026-11-12, but the repository named neither a
+  project owner nor the role that approves amendments to the constitution.
+- **Action:** Handled — the project owner was recorded as "User" in `projectBrief.md`, and the
+  Governance section now names the role *Project Owner* (currently `User`, recorded 2026-11-13) as
+  the amendment approver. Amendment commit `b84f879`, version PATCH 1.0.1: a clarification, no
+  principle changed.
+- **Origin:** Session 2026-11-12 (`speckit-constitution`, constitution v1.0.0); closed 2026-11-13.
 - **Status:** Handled
 
 ## Accepted Observations

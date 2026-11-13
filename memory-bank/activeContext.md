@@ -101,13 +101,15 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
   `guidance-runtime` itself stays on the public source repository `paschbaer/guidance-runtime`.
   Mirroring artifacts into the private repository is the `guidance` product's own pipeline step
   (FR-027–FR-029), not a job in this repository's `release.yml`.
+- The Project Owner (currently "User") approves constitution-only amendments. Recorded as PATCH
+  1.0.1 because it names the decision-maker without changing a principle.
 
 ## Open Questions
 
 - [x] Who is the project owner (person or team) for `projectBrief.md`? — User (2026-11-13).
 - [x] Who are the primary users — workstation operators, or a wider developer audience? — User.
-- [ ] Which role approves amendments to the constitution (the ratification date is fixed at
-  2026-11-12)?
+- [x] Which role approves amendments to the constitution? — the Project Owner, currently held by
+  "User" (recorded 2026-11-13, constitution PATCH 1.0.1).
 
 ## Blockers
 
@@ -116,18 +118,16 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
 
 ## Next Actions
 
-1. Designate the role that approves constitution amendments (RW-009); the project owner and the
-   primary users are recorded as "User".
-2. Decide the CLI-wide exit-code taxonomy (clap usage errors currently exit 2, colliding with
+1. Decide the CLI-wide exit-code taxonomy (clap usage errors currently exit 2, colliding with
    "at least one target failed").
-3. Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
-4. Add a service-control port so the Windows service-state half of target isolation becomes testable
+2. Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
+3. Add a service-control port so the Windows service-state half of target isolation becomes testable
    (RW-005).
-5. Restart the Guidance server so the final `.guidance/` state is snapshotted.
-6. Re-bless `.guidance/state/final-review.json` (`headCommit`) after the next commit that changes
+4. Restart the Guidance server so the final `.guidance/` state is snapshotted.
+5. Re-bless `.guidance/state/final-review.json` (`headCommit`) after the next commit that changes
    code, before re-running the completion gate.
 
 ## Last Updated
 
 2026-11-13 (agent session: cross-platform test fixtures, Linux leg measured under WSL; project
-brief owner and primary users recorded as "User")
+brief owner and primary users recorded as "User"; governance approver named, PATCH 1.0.1)

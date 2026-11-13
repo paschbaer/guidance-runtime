@@ -57,7 +57,6 @@ None — see Change Log.
 
 ## Known Issues
 
-- The amendment approver role is still undesignated (RW-009).
 - `projectBrief.md` and `productContext.md` no longer contain template placeholders; their
   remaining open items are roadmap questions recorded in `productContext.md`.
 - The Windows service-control transaction is still only partially testable: the service-state half
@@ -227,3 +226,11 @@ None — see Change Log.
   which repository an operator configures.
 - Mirroring into the private repository remains the `guidance` product's pipeline step; this
   repository's `release.yml` publishes only its own releases, as `research.md` (R8) already states.
+
+### 2026-11-13 — Governance amendment (approver named)
+
+- The constitution's Governance section now names the role that approves a constitution-only
+  amendment: the *Project Owner*, currently `User`. Recorded as PATCH 1.0.1 (a clarification, no
+  principle changed), Last Amended 2026-11-13; amendment commit `b84f879`.
+- RW-009 is closed; the amendment was kept as a constitution-only commit on its own branch so it
+  does not carry the exit-code or service-port work.
