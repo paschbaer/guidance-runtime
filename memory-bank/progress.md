@@ -45,7 +45,7 @@ None — see Change Log.
 
 ## Planned
 
-- [ ] Define the first milestone and acceptance criteria.
+- [x] Define the first milestone and acceptance criteria (Milestone 1 completed 2026-11-13).
 - [ ] Add a service-control port so the backup/restore transaction becomes testable (RW-005).
       This gap is now explicit: the Windows service-state half of scenario 7 has no automated test.
       → Handled 2026-11-13 (commit `907088f`): service-control port + fake-driven transaction tests;
@@ -81,16 +81,17 @@ None — see Change Log.
 
 ### Milestone 1: Repository Ready
 
-**Status:** In progress
+**Status:** Complete — 2026-11-13
 
 **Exit criteria:**
 
 - [x] Project brief is complete (owner and primary users recorded 2026-11-13).
-- [x] Constitution is ratified (v1.0.0, 2026-11-12).
+- [x] Constitution is ratified (v1.0.0, 2026-11-12; amended to 1.0.1 on 2026-11-13).
 - [x] Build, test, lint, and run commands are documented and verified.
 - [x] Architecture and important boundaries are documented.
 - [x] Repository instructions reference the Memory Bank.
-- [ ] No unresolved critical setup issues remain.
+- [x] No unresolved critical setup issues remain (RW-009 closed 2026-11-13; the remaining RW-005/006/007
+      entries are technical follow-ups with trigger points, not setup blockers).
 
 ## Change Log
 
@@ -257,3 +258,12 @@ None — see Change Log.
 - RW-009 is closed in `remaining-work-plan.md`; the amendment was kept as a constitution-only
   commit on its own branch so it does not carry the exit-code or service-port work. The merge
   resolved the expected memory-bank overlap with the chained-workflow branch.
+
+### 2026-11-13 — Milestone 1 complete
+
+- All six exit criteria of "Repository Ready" are met: brief, constitution, documented commands,
+  documented architecture, Memory Bank referenced from the repository instructions, and no
+  unresolved critical setup issue (RW-009 was the last named one).
+- The remaining tracked work (RW-005 handled; RW-006, RW-007 open with trigger points) is technical
+  follow-up work, not a setup blocker. `--json`, the ADRs, the end-to-end environment check and the
+  non-Windows release legs stay tracked as planned work.
