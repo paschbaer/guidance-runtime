@@ -36,7 +36,6 @@ impl Installer for ZipInstaller {
 }
 
 #[allow(unused_variables)]
-#[cfg(windows)]
 fn install_archive(target: &UpdateTarget, version: &Version, bytes: &[u8]) -> Result<()> {
     #[cfg(not(windows))]
     {
