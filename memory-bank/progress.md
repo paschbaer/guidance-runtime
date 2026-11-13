@@ -54,6 +54,8 @@ None — see Change Log.
       → Done 2026-11-13: `docs/adr/` with ADR-0001…ADR-0009 (Nygard format, evidence-cited);
       indexed in `docs/adr/README.md`, linked from `systemPatterns.md`.
 - [ ] Validate the development environment end to end (install/uninstall via `scripts/*.ps1`).
+      Checklist prepared: `memory-bank/validation-checklist.md` — execute on a real Windows
+      machine and record exit codes there per its Recording section.
 - [x] Decide the CLI-wide exit-code taxonomy: clap usage errors exit 2, which collides with the
       contract's "at least one target failed" status 2.
       → Decided and implemented 2026-11-13 (commit `cf573af`): usage errors exit 1, help/version
