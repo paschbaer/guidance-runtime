@@ -11,8 +11,20 @@
                                                   guidance-tray.exe, guidance-updater.exe
     CommonAppDataFolder\Guidance Runtime\config\  example TOMLs, never overwritten
     CommonAppDataFolder\Guidance Runtime\logs\    created empty
+
+  Update credentials (per-user model):
+    The MSI itself is secret-free: it carries no token, no token property and no
+    custom action that touches credential data. On the install exit dialog an
+    opt-in checkbox (default off) launches `cmdkey /pass` in the invoking
+    user's session; the user types their OWN GitHub token there, and cmdkey
+    writes it as the generic credential 'guidance:update:guidance-update' into
+    THAT user's Credential Manager. This keeps the token out of MSI properties,
+    install logs and process command lines, and it can never land in a SYSTEM
+    or service account store (silent deployments never show the exit dialog).
+    Re-running the checkbox overwrites the existing entry by explicit choice.
 -->
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
 
   <Package Name="Guidance Runtime Service"
            Manufacturer="Guidance"
@@ -86,6 +98,34 @@
         </Directory>
       </Directory>
     </StandardDirectory>
+
+    <!-- Standard wizard UI (v4+ consumer API; the WIXUI_INSTALLDIR property +
+         UIRef form is no longer supported — the dialog-set symbols are internal). -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+
+    <!-- Opt-in exit-dialog checkbox: run cmdkey /pass in the user's session when
+         Finish is clicked. Implemented as a core-schema Type-34 custom action
+         (Directory + ExeCommand) invoked by the DoAction control event — no
+         WixCA/WixShellExec binary needed. Impersonation: immediate custom
+         actions in the UI phase run under the invoking user, so cmdkey writes
+         the generic credential 'guidance:update:guidance-update' to THAT
+         user's Credential Manager, never to SYSTEM. The token is typed
+         interactively and never passes through an MSI property, a log or a
+         command line; %USERNAME% only fills the credential's username field,
+         which the updater does not read (only the CredentialBlob is
+         consulted). Re-running overwrites the existing entry by explicit
+         choice. -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT"
+              Value="Configure update credentials now (prompts for your personal GitHub token)" />
+    <CustomAction Id="RunCredentialPrompt"
+                  Directory="SystemFolder"
+                  ExeCommand="cmd.exe /c cmdkey /generic:guidance:update:guidance-update /user:%USERNAME% /pass"
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="ignore" />
+    <UI>
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="RunCredentialPrompt" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />
+    </UI>
 
     <!-- Parity with install-dev.ps1: automatic restart on service failure.
          Type 34 custom action (SystemFolder + command line), scheduled after the

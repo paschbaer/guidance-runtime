@@ -1,3 +1,26 @@
+# Guidance Runtime workload configuration.
+#
+# Top-level keys:
+#   log_dir      directory for workload logs. Optional; defaults to "logs"
+#                relative to the service's working directory — set an absolute
+#                path in production. Created on start.
+#   [[workloads]]  one block per managed workload; omit for none.
+#
+# Per workload:
+#   id           stable identifier, unique in this file (required).
+#   command      path of the executable to supervise (required).
+#   args         argument list (optional, default: none).
+#   working_dir  working directory for the process (optional).
+#   enabled      start the workload on service start (optional, default false).
+#   endpoint     endpoint URL reported for the workload (optional).
+#   env          environment variables for the process (optional map).
+#
+#   [workloads.restart]  restart behaviour (optional block):
+#     policy         "on_failure" (default) or "always"; any other value
+#                    restarts never.
+#     max_attempts   restart attempts before giving up (default 5).
+#     delay_seconds  delay between attempts, in seconds (default 10).
+
 log_dir="C:/ProgramData/Guidance Runtime/logs"
 [[workloads]]
 id="guidance-mcp"

@@ -5,7 +5,39 @@
 # and its output wording is unchanged. It also stays flat when a channel is
 # changed; the updater never rewrites an operator's file into the array form.
 # Use the [[targets]] form to maintain more than one product with the same
-# updater. Do not mix the two forms in one file.
+# updater. Do not mix the two forms in one file; unknown keys are rejected in
+# both forms.
+#
+# Parameters, flat form (single product, target name "guidance-runtime"):
+#   repository     owner/repository holding the releases (required).
+#   channel        "stable" (default) or "beta", case-insensitive; anything
+#                  else is rejected. "stable" offers published releases only,
+#                  "beta" additionally offers prereleases tagged v<semver>
+#                  -beta.N (never alpha/rc, never drafts). See README.md,
+#                  section "Channels".
+#   install_dir    installation directory. Optional in this form; defaults to
+#                  "C:\Program Files\Guidance Runtime".
+#   service_name   optional. Omitted for "guidance-runtime" it still means the
+#                  service "GuidanceRuntime"; any other product without it is
+#                  installed without service control.
+#   asset_pattern  optional asset suffix; must not be blank and must end in
+#                  ".zip". Omit to derive it from the running platform and
+#                  architecture (see the note at the bottom of this file).
+#
+# Parameters, [[targets]] form (one block per product):
+#   name             stable identifier, unique in this file (required).
+#   repository       owner/repository (required).
+#   visibility       "public" (default; no credential is consulted) or
+#                    "private" (requires credential_entry).
+#   credential_entry NAME of the credential-store entry, required when private
+#                    and never the secret itself. Windows Credential Manager
+#                    target name: guidance:update:<credential_entry>.
+#   channel          "stable" (default) or "beta"; see above.
+#   install_dir      required in this form (only the flat form defaults it).
+#                    Must be unique and must not equal another target's
+#                    rollback directory ("<install_dir>.backup").
+#   service_name     optional; see flat form.
+#   asset_pattern    optional; see flat form.
 
 # --- Flat form (single product) --------------------------------------------
 

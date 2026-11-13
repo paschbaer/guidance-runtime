@@ -67,9 +67,17 @@ $distDir = Join-Path $repoRoot 'dist'
 New-Item -ItemType Directory -Force $distDir | Out-Null
 $msiPath = Join-Path $distDir "guidance-runtime-$resolvedVersion-$Arch.msi"
 
+$wixExt = 'WixToolset.UI.wixext'
+$hasExt = wix extension list -g 2>$null | Select-String -Quiet $wixExt
+if (-not $hasExt) {
+  wix extension add -g $wixExt
+  if ($LASTEXITCODE -ne 0) { throw "Failed to add WiX extension $wixExt (needed for the install UI and the exit-dialog checkbox)" }
+}
+
 wix build `
   -acceptEula wix7 `
   -arch $Arch `
+  -ext $wixExt `
   -d "GuidanceVersion=$resolvedVersion" `
   -d "ReleaseBin=$binDir" `
   -d "ConfigDir=$(Join-Path $repoRoot 'config')" `
