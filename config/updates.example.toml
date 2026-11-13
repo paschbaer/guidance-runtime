@@ -10,7 +10,7 @@
 # --- Flat form (single product) --------------------------------------------
 
 # GitHub owner/repository containing Guidance Runtime releases.
-repository = "YOUR-ORG/guidance-runtime"
+repository = "paschbaer/guidance-runtime"
 channel = "stable"
 install_dir = "C:/Program Files/Guidance Runtime"
 service_name = "GuidanceRuntime"
@@ -30,7 +30,7 @@ service_name = "GuidanceRuntime"
 #
 # [[targets]]
 # name = "guidance-runtime"
-# repository = "YOUR-ORG/guidance-runtime"
+# repository = "paschbaer/guidance-runtime"
 # visibility = "public"
 # channel = "stable"
 # install_dir = "C:/Program Files/Guidance Runtime"
@@ -38,7 +38,7 @@ service_name = "GuidanceRuntime"
 #
 # [[targets]]
 # name = "guidance"
-# repository = "YOUR-ORG/guidance-dist"
+# repository = "paschbaer/guidance-dist"
 # visibility = "private"
 # # The NAME of the credential store entry, never the secret itself. The secret
 # # is read from the operating system's protected per-user store. Provision the

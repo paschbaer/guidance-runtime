@@ -129,7 +129,7 @@ service_name = "GuidanceRuntime"
 
 [[targets]]
 name = "guidance"
-repository = "ORG/guidance-dist"
+repository = "paschbaer/guidance-dist"
 visibility = "private"
 credential_entry = "guidance-update"
 channel = "stable"

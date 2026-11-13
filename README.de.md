@@ -21,7 +21,7 @@ Copy-Item .\config\updates.example.toml .\config\updates.toml
 In `updates.toml` werden GitHub-Repository und Update-Channel festgelegt:
 
 ```toml
-repository = "YOUR-ORG/guidance-runtime"
+repository = "paschbaer/guidance-runtime"
 channel = "stable" # stable oder beta
 ```
 
@@ -67,7 +67,7 @@ Ein einzelnes Produkt kann die flache Form oben behalten. Für mehrere Produkte 
 ```toml
 [[targets]]
 name = "guidance-runtime"
-repository = "YOUR-ORG/guidance-runtime"
+repository = "paschbaer/guidance-runtime"
 visibility = "public"
 channel = "stable"
 install_dir = "C:/Program Files/Guidance Runtime"
@@ -75,7 +75,7 @@ service_name = "GuidanceRuntime"
 
 [[targets]]
 name = "guidance"
-repository = "YOUR-ORG/guidance-dist"
+repository = "paschbaer/guidance-dist"
 visibility = "private"
 credential_entry = "guidance-update"
 channel = "stable"

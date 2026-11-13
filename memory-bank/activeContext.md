@@ -96,6 +96,11 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
   different questions and the docs state the difference.
 - Windows installation remains the only implemented install platform; macOS/Linux checking is
   supported and the CI leg exists, but non-Windows release legs are deferred until artifacts exist.
+- The `guidance` product is obtained from a separate, **release-only private** repository,
+  `paschbaer/guidance-dist` (target name `guidance`, credential entry `guidance-update`).
+  `guidance-runtime` itself stays on the public source repository `paschbaer/guidance-runtime`.
+  Mirroring artifacts into the private repository is the `guidance` product's own pipeline step
+  (FR-027–FR-029), not a job in this repository's `release.yml`.
 
 ## Open Questions
 

@@ -180,7 +180,7 @@ channel = "stable"
 
 [[targets]]
 name = "guidance"
-repository = "ORG/guidance-dist"
+repository = "paschbaer/guidance-dist"
 visibility = "private"
 credential_entry = "guidance-update"
 install_dir = "C:/Program Files/Guidance"

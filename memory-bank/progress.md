@@ -216,3 +216,14 @@ None — see Change Log.
   question.
 - Still open by design: which role approves constitution amendments (RW-009), and whether
   Linux/macOS support is a committed roadmap item.
+
+### 2026-11-13 — Concrete update-source repositories
+
+- Replaced the `YOUR-ORG/…` placeholders with the real repositories: `paschbaer/guidance-runtime`
+  (public source repo) and `paschbaer/guidance-dist` (release-only, private, target `guidance`).
+  Applied to `config/updates.example.toml`, both READMEs, and the spec's contract and data-model
+  examples.
+- Parser-test fixtures keep the neutral `ORG/guidance-dist` sample value; they assert parsing, not
+  which repository an operator configures.
+- Mirroring into the private repository remains the `guidance` product's pipeline step; this
+  repository's `release.yml` publishes only its own releases, as `research.md` (R8) already states.
