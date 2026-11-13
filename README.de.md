@@ -100,7 +100,7 @@ Das Token darf **nur Lesezugriff auf die Release-Artefakte dieses Repositorys** 
 
 Ein Check gibt eine Zeile pro Ziel aus, plus eine eingerückte Detailzeile, wenn der Zustand eine handlungsrelevante Ursache hat (etwa einen nicht bereitgestellten Eintrag). `--format json` gibt stattdessen ein Dokument mit `spec_version`, `checked_at`, `exit_status` und einem `targets`-Array aus; mit `--target` enthält das Array genau einen Eintrag. Die Zustände sind `update_available`, `up_to_date`, `not_installed`, `inaccessible`, `network_error`, `invalid_artifact` und `credential_store_unavailable`.
 
-Exit-Status: `0` sauber, `1` Konfigurations- oder Auswahlfehler, die der Updater selbst erkennt, `2` mindestens ein Ziel fehlgeschlagen. Ein Kommandozeilen-Nutzungsfehler (etwa ein ungültiger `--format`-Wert) endet ebenfalls mit `2`, weil clap diesen Status verwendet. Die historische flache Form behält ihre bisherige Wortwahl und Exit `1`, wenn der Quellzugriff fehlschlägt.
+Exit-Status: `0` sauber, `1` Konfigurations- oder Auswahlfehler, die der Updater selbst erkennt, `2` mindestens ein Ziel fehlgeschlagen. Ein Kommandozeilen-Nutzungsfehler (etwa ein ungültiger `--format`-Wert) endet mit `1`: es wurde nichts ausgeführt. Exit `2` ist Ziel-Fehlschlägen vorbehalten und wird nie für Nutzungsfehler verwendet. Die historische flache Form behält ihre bisherige Wortwahl und Exit `1`, wenn der Quellzugriff fehlschlägt.
 
 ### Installation und installierte Version
 

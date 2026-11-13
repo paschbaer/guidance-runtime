@@ -27,7 +27,7 @@ Delivered:
 
 The CLI starts a detached updater and exits `0` once it is running; the per-target install result and the updater's own exit status (`0` or `2`) are produced by that process after the CLI exits.
 
-Exit status of a check run: `0` when every target produced a usable answer, `1` for a configuration or selection error detected by the updater, `2` when at least one target reported `inaccessible`, `network_error`, `invalid_artifact` or `credential_store_unavailable`. A command-line usage error (for example an invalid `--format` value) also exits `2`, because clap uses that status. The legacy flat check keeps the historical behavior of exiting `1` when the source read fails.
+Exit status of a check run: `0` when every target produced a usable answer, `1` for a configuration or selection error detected by the updater, `2` when at least one target reported `inaccessible`, `network_error`, `invalid_artifact` or `credential_store_unavailable`. A command-line usage error (for example an invalid `--format` value) exits `1`: nothing was run. Exit `2` is reserved for target failures and is never used for usage errors. The legacy flat check keeps the historical behavior of exiting `1` when the source read fails.
 
 ### Behaviour change: a refusal is reported as an access problem
 

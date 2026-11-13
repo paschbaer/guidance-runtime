@@ -100,7 +100,7 @@ Grant the token **read access to the release artifacts of that repository only**
 
 A check prints one line per target, plus an indented detail line where the state has an actionable cause (for example an unprovisioned entry). `--format json` emits one document instead, with `spec_version`, `checked_at`, `exit_status` and a `targets` array; with `--target` that array holds one entry. The outcome states are `update_available`, `up_to_date`, `not_installed`, `inaccessible`, `network_error`, `invalid_artifact` and `credential_store_unavailable`.
 
-Exit status: `0` clean, `1` configuration or selection errors detected by the updater, `2` at least one target failed. A command-line usage error (for example an invalid `--format` value) also exits `2`, because clap uses that status. The historical flat form keeps its pre-feature wording and its exit `1` when the source read fails.
+Exit status: `0` clean, `1` configuration or selection errors detected by the updater, `2` at least one target failed. A command-line usage error (for example an invalid `--format` value) exits `1`: nothing was run. Exit `2` is reserved for target failures and is never used for usage errors. The historical flat form keeps its pre-feature wording and its exit `1` when the source read fails.
 
 ### Installation and installed version
 

@@ -84,7 +84,15 @@ enum UpdateCommand {
 }
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    // Usage errors exit 1 per update-cli.md §2; only help/version (which write
+    // to stdout) exit 0. Exit 2 stays reserved for "at least one target failed".
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            err.print().expect("failed to print clap error");
+            std::process::exit(if err.use_stderr() { 1 } else { 0 });
+        }
+    };
     let json_output = cli.json;
     let command = match cli.command {
         Command::Update { command } => return update(command).await,
