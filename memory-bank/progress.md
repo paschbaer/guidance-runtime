@@ -46,18 +46,20 @@ None — see Change Log.
 ## Planned
 
 - [x] Define the first milestone and acceptance criteria (Milestone 1 completed 2026-11-13).
-- [ ] Add a service-control port so the backup/restore transaction becomes testable (RW-005).
+- [x] Add a service-control port so the backup/restore transaction becomes testable (RW-005).
       This gap is now explicit: the Windows service-state half of scenario 7 has no automated test.
       → Handled 2026-11-13 (commit `907088f`): service-control port + fake-driven transaction tests;
       RW-005 marked Handled in `remaining-work-plan.md`.
-- [ ] Record initial architectural decisions as ADRs.
+- [x] Record initial architectural decisions as ADRs.
+      → Done 2026-11-13: `docs/adr/` with ADR-0001…ADR-0009 (Nygard format, evidence-cited);
+      indexed in `docs/adr/README.md`, linked from `systemPatterns.md`.
 - [ ] Validate the development environment end to end (install/uninstall via `scripts/*.ps1`).
-- [ ] Decide the CLI-wide exit-code taxonomy: clap usage errors exit 2, which collides with the
+- [x] Decide the CLI-wide exit-code taxonomy: clap usage errors exit 2, which collides with the
       contract's "at least one target failed" status 2.
       → Decided and implemented 2026-11-13 (commit `cf573af`): usage errors exit 1, help/version
       exit 0, exit 2 stays reserved for target failures (contract `update-cli.md` §2). Pinned by
       `crates/cli/tests/exit_codes.rs` and `crates/updater/tests/exit_codes.rs`.
-- [ ] Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
+- [x] Wire or remove the global `--json` flag on `guidance`; update subcommands use `--format json`.
       → Resolved 2026-11-13: removed (Option A, commit `fa490cd` on `feature/json-flag-resolution`).
 - [ ] Add macOS/Linux release legs once non-Windows artifacts are published.
 

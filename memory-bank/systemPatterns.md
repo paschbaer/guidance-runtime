@@ -146,10 +146,18 @@ SHA-256 → verify → hand off to `guidance-updater` → install with backup/re
 
 ## Architectural Decisions
 
-Record durable decisions as ADRs and link them here.
+Recorded as ADRs in `docs/adr/` (index: `docs/adr/README.md`):
 
-- (unresolved) No ADR directory exists yet; `docs/SPECIFICATION-v1.1.md` is the current
-  authoritative description of intent.
+- ADR-0001 typed `Method` enum with exhaustive IPC dispatch
+- ADR-0002 ports for the update pipeline (Releases, Downloader, Installer,
+  CredentialStore, ServiceControl)
+- ADR-0003 `install.json` marker as the authoritative installed-version source
+- ADR-0004 transactional Windows install with full rollback
+- ADR-0005 seven-state outcome model with a 0/1/2 exit taxonomy
+- ADR-0006 normalized multi-target configuration, legacy flat form preserved
+- ADR-0007 platform credential store, least-privilege, indistinguishable access failures
+- ADR-0008 archive-driven install content
+- ADR-0009 platform-architecture asset suffix table
 
 ## Known Technical Risks
 

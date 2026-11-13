@@ -117,6 +117,8 @@ CI is green on every matrix leg (`windows-latest`, `ubuntu-latest`, `macos-lates
   `guidance-runtime` itself stays on the public source repository `paschbaer/guidance-runtime`.
   Mirroring artifacts into the private repository is the `guidance` product's own pipeline step
   (FR-027–FR-029), not a job in this repository's `release.yml`.
+- These decisions are now formally recorded as ADRs in `docs/adr/` (ADR-0001…ADR-0009, created
+  2026-11-13); the sections above remain the working summaries.
 - The Project Owner (currently "User") approves constitution-only amendments. Recorded as PATCH
   1.0.1 because it names the decision-maker without changing a principle.
 
