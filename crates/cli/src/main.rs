@@ -50,7 +50,7 @@ enum Command {
         command: UpdateCommand,
     },
 }
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum UpdateCommand {
     Check {
         #[arg(long,default_value=guidance_update::DEFAULT_CONFIG)]
@@ -119,6 +119,12 @@ async fn main() -> Result<()> {
     Ok(())
 }
 async fn update(command: UpdateCommand) -> Result<()> {
+    // Update runs live in this CLI process, not in the service, so their
+    // outcomes would otherwise exist only on the console. Log them to the
+    // shared logs directory (daily rotation, JSON) next to service.log.
+    #[cfg(windows)]
+    init_update_logging();
+    tracing::info!(command = ?command, "update command invoked");
     match command {
         UpdateCommand::Channel {
             channel,
@@ -130,6 +136,11 @@ async fn update(command: UpdateCommand) -> Result<()> {
                 guidance_update::set_or_get_channel(&mut cfg, target.as_deref(), channel)?;
             if channel.is_some() {
                 cfg.save(&config)?;
+                tracing::info!(
+                    target = ?target,
+                    channel = ?channel,
+                    "update channel changed"
+                );
             }
             println!("{message}")
         }
@@ -161,6 +172,11 @@ async fn update(command: UpdateCommand) -> Result<()> {
                 // JSON changes the rendering only, never this exit status.
                 let outcome =
                     guidance_update::check_update_with(&source, only, None, &current).await?;
+                tracing::info!(
+                    target = %only.name,
+                    outcome = %outcome.message(),
+                    "update check finished"
+                );
                 match format {
                     Format::Text => println!("{}", outcome.message()),
                     Format::Json => {
@@ -174,6 +190,17 @@ async fn update(command: UpdateCommand) -> Result<()> {
             }
 
             let run = guidance_update::check_all(&source, &store, &cfg, &current).await;
+            for t in &run.targets {
+                tracing::info!(
+                    target = %t.target,
+                    state = %t.state,
+                    installed = ?t.installed_version,
+                    offered = ?t.offered_version,
+                    channel = %t.channel,
+                    "update check"
+                );
+            }
+            tracing::info!(exit_status = run.exit_status(), "update check finished");
             match format {
                 Format::Text => print!("{}", guidance_update::render_run(&run)),
                 Format::Json => println!("{}", guidance_update::render_json_now(&run)?),
@@ -211,6 +238,12 @@ async fn update(command: UpdateCommand) -> Result<()> {
                     "--wait-pid".to_string(),
                     std::process::id().to_string(),
                 ];
+                tracing::info!(
+                    target = ?target,
+                    current = %current,
+                    updater = %temp.display(),
+                    "update install requested; detached updater started"
+                );
                 // The target selection must reach the updater; dropping it here
                 // would make the flag silently select the wrong product.
                 if let Some(name) = target {
@@ -223,4 +256,20 @@ async fn update(command: UpdateCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Daily-rolling JSON log for update commands, next to service.log. Only the
+/// outcome events go here; the rendered report stays on the console.
+#[cfg(windows)]
+fn init_update_logging() {
+    const UPDATE_LOG_DIR: &str = "C:/ProgramData/Guidance Runtime/logs";
+    let dir = PathBuf::from(UPDATE_LOG_DIR);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let appender = tracing_appender::rolling::daily(&dir, "update.log");
+    tracing_subscriber::fmt()
+        .json()
+        .with_writer(appender)
+        .init();
 }

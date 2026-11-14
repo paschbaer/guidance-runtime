@@ -59,7 +59,7 @@ sc.exe start GuidanceRuntime
 
 In `cmd.exe` lautet das Äquivalent `sc.exe create GuidanceRuntime binPath= "\"C:\Program Files\Guidance Runtime\guidance-service.exe\" --config \"C:\ProgramData\Guidance Runtime\config\runtime.toml\"" start= auto DisplayName= "Guidance Runtime Service". Prüfen mit `sc.exe qc GuidanceRuntime`: `BINARY_PATH_NAME` muss die Anführungszeichen enthalten.
 
-Die Workloads und das Log-Verzeichnis werden in `C:\ProgramData\Guidance Runtime\config\runtime.toml` gepflegt (`log_dir`, `[[workloads]]`); nach Änderungen den Dienst neu starten. Die Workload-Ausgabe landet in `<log_dir>\<workload-id>.log`; die eigenen Ereignisse des Dienstes (Lebenszyklus, Spawn-Fehler, Restart-Entscheidungen) gehen nach `C:\ProgramData\Guidance Runtime\logs\service.log.<datum>` (tägliche Rotation, JSON), unabhängig von `log_dir`.
+Die Workloads und das Log-Verzeichnis werden in `C:\ProgramData\Guidance Runtime\config\runtime.toml` gepflegt (`log_dir`, `[[workloads]]`); nach Änderungen den Dienst neu starten. Die Workload-Ausgabe landet in `<log_dir>\<workload-id>.log`; die eigenen Ereignisse des Dienstes (Lebenszyklus, Spawn-Fehler, Restart-Entscheidungen) gehen nach `C:\ProgramData\Guidance Runtime\logs\service.log.<datum>` (tägliche Rotation, JSON), unabhängig von `log_dir`; Update-Befehle aus der Kommandozeile loggen ihre Ergebnisse nach `update.log.<datum>` im selben Verzeichnis.
 
 ### 3. Self-Updater konfigurieren
 
@@ -208,7 +208,7 @@ guidance  no access to update source
 
 Die eingerückte Zeile nennt bereits den anzulegenden Zielnamen.
 
-**Schritt 1 — Token bei GitHub erstellen.** github.com → Profilsymbol → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**:
+**Schritt 1 — GitHub-Zugangsdaten erstellen.** GitHub akzeptiert für programmatische Zugriffe (API, Git) seit November 2020 **kein echtes Kennwort mehr** — das „Kennwort" ist hier das Personal Access Token, und nur dieses landet im Credential Manager (der Updater sendet es als `Authorization: Bearer <token>`). Erstellen unter github.com → Profilsymbol → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**:
 
 - *Token name:* `guidance-updates`; *Expiration:* nach eigener Richtlinie (z. B. 90 Tage).
 - *Resource owner:* `paschbaer`.
@@ -221,18 +221,18 @@ Die eingerückte Zeile nennt bereits den anzulegenden Zielnamen.
 | Feld | Wert |
 |---|---|
 | Internetadresse oder Netzwerkadresse | `guidance:update:guidance-update` |
-| Benutzername | `paschbaer` (frei wählbar — der Updater liest nur das Kennwort-Feld) |
-| Kennwort | das Token `github_pat_…` einfügen |
+| Benutzername | dein eigener GitHub-Benutzername (wird vom Updater nicht gelesen — hilft nur bei der Zuordnung) |
+| Kennwort | das Token `github_pat_…` einfügen (dieses "Kennwort" akzeptiert GitHub; dein echtes Passwort würde abgelehnt) |
 
 Mit **Speichern** ablegen. Feldbezeichnungen können je nach Windows-Sprachversion leicht abweichen.
 
 **Schritt 2b — oder per `cmdkey`:**
 
 ```powershell
-cmdkey /generic:guidance:update:guidance-update /user:paschbaer /pass
+cmdkey /generic:guidance:update:guidance-update /user:<dein-github-benutzername> /pass
 ```
 
-`/pass` ohne Wert fragt das Token ab, ohne es anzuzeigen — es landet weder im Shell-Verlauf noch in der Prozessliste. Die Form `/pass:<token>` hinterlässt das Token im Klartext im Verlauf und ist zu vermeiden. Alternativ bietet der WiX-MSI-Installer im Abschlussdialog eine Checkbox (Standard: aus), die genau diese `cmdkey`-Abfrage im eigenen Benutzerkontext startet; das MSI selbst enthält kein Token.
+`/pass` ohne Wert fragt das Token ab, ohne es anzuzeigen — es landet weder im Shell-Verlauf noch in der Prozessliste. Die Form `/pass:<token>` hinterlässt das Token im Klartext im Verlauf und ist zu vermeiden. Alternativ bietet der WiX-MSI-Installer im Abschlussdialog eine Checkbox (Standard: aus): Sie startet ein geführtes Skript (`provision-credentials.ps1` im Installationsverzeichnis), das das Token maskiert abfragt und per Win32-API direkt in deinem Benutzerkonto speichert — das Token taucht nie in einer Kommandozeile oder einem Log auf, und das MSI selbst enthält kein Token.
 
 **Schritt 3 — Eintrag prüfen:**
 

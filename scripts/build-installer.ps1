@@ -81,6 +81,7 @@ wix build `
   -d "GuidanceVersion=$resolvedVersion" `
   -d "ReleaseBin=$binDir" `
   -d "ConfigDir=$(Join-Path $repoRoot 'config')" `
+  -d "ProvisionScript=$(Join-Path $repoRoot 'installer\provision-credentials.ps1')" `
   -o $msiPath `
   (Join-Path $repoRoot 'installer\GuidanceRuntime.wxs')
 

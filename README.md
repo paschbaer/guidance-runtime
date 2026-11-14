@@ -59,7 +59,7 @@ sc.exe start GuidanceRuntime
 
 In `cmd.exe`, the equivalent is `sc.exe create GuidanceRuntime binPath= "\"C:\Program Files\Guidance Runtime\guidance-service.exe\" --config \"C:\ProgramData\Guidance Runtime\config\runtime.toml\"" start= auto DisplayName= "Guidance Runtime Service". Verify with `sc.exe qc GuidanceRuntime`: `BINARY_PATH_NAME` must contain the quotes.
 
-Workloads and the log directory are maintained in `C:\ProgramData\Guidance Runtime\config\runtime.toml` (`log_dir`, `[[workloads]]`); restart the service after changing it. Workload output lands in `<log_dir>\<workload-id>.log`; the service's own events (lifecycle, spawn failures, restart decisions) go to `C:\ProgramData\Guidance Runtime\logs\service.log.<date>` (daily rotation, JSON), independent of `log_dir`.
+Workloads and the log directory are maintained in `C:\ProgramData\Guidance Runtime\config\runtime.toml` (`log_dir`, `[[workloads]]`); restart the service after changing it. Workload output lands in `<log_dir>\<workload-id>.log`; the service's own events (lifecycle, spawn failures, restart decisions) go to `C:\ProgramData\Guidance Runtime\logs\service.log.<date>` (daily rotation, JSON), independent of `log_dir`; update commands run from the command line log their outcomes to `update.log.<date>` in the same directory.
 
 ### 3. Configure the self-updater
 
@@ -208,7 +208,7 @@ guidance  no access to update source
 
 The indented line already names the target to create.
 
-**Step 1 — create the token at GitHub.** github.com → profile icon → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**:
+**Step 1 — create your GitHub credentials.** For programmatic access (API, Git), GitHub no longer accepts real passwords since November 2020 — the "password" here is a Personal Access Token, and only that token is stored in the Credential Manager (the updater sends it as `Authorization: Bearer <token>`). Create it at github.com → profile icon → **Settings** → **Developer settings** → **Personal access tokens** → **Fine-grained tokens** → **Generate new token**:
 
 - *Token name:* `guidance-updates`; *Expiration:* per your own policy (e.g. 90 days).
 - *Resource owner:* `paschbaer`.
@@ -221,18 +221,18 @@ The indented line already names the target to create.
 | Field | Value |
 |---|---|
 | Internet or network address | `guidance:update:guidance-update` |
-| User name | `paschbaer` (anything works — the updater reads only the password field) |
-| Password | paste the `github_pat_…` token |
+| User name | your own GitHub username (not read by the updater — just for your own bookkeeping) |
+| Password | paste the `github_pat_…` token (this is the "password" GitHub accepts; your real password would be rejected) |
 
 Save with **Save**. Field labels may differ slightly between Windows language versions.
 
 **Step 2b — or via `cmdkey`:**
 
 ```powershell
-cmdkey /generic:guidance:update:guidance-update /user:paschbaer /pass
+cmdkey /generic:guidance:update:guidance-update /user:<your-github-username> /pass
 ```
 
-`/pass` without a value prompts for the token without echoing it — it never lands in shell history or the process list. The form `/pass:<token>` leaves the token in plain text in the history and should be avoided. Alternatively, the WiX MSI installer offers an exit-dialog checkbox (default off) that starts exactly this `cmdkey` prompt in the user's own session; the MSI itself carries no token.
+`/pass` without a value prompts for the token without echoing it — it never lands in shell history or the process list. The form `/pass:<token>` leaves the token in plain text in the history and should be avoided. Alternatively, the WiX MSI installer offers an exit-dialog checkbox (default off): it starts a guided script (`provision-credentials.ps1` in the installation folder) that reads the token with masked input and stores it via the Win32 API directly in your user account — the token never touches a command line or a log, and the MSI itself carries no token.
 
 **Step 3 — verify the entry:**
 
