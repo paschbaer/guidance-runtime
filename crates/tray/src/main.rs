@@ -1,3 +1,6 @@
+// GUI app: no console window in release builds; debug keeps one for dev output.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 #[cfg(not(windows))]
 fn main() {
     eprintln!("guidance-tray is available on Windows only");
@@ -38,6 +41,7 @@ fn main() -> anyhow::Result<()> {
     ])?;
     let _tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
+        .with_icon(app_icon())
         .with_tooltip("Guidance Runtime")
         .build()?;
     let runtime = tokio::runtime::Runtime::new()?;
@@ -73,6 +77,94 @@ fn channel_summary(config: &guidance_update::UpdateConfig) -> String {
     } else {
         format!("{} targets", targets.len())
     }
+}
+
+/// Renders the tray icon in code so the repository carries no binary asset.
+/// Style taken from the operator's "i" icon (pixel analysis of icon.png):
+/// a blue badge with a vertical gradient (bright blue ~RGB 3,80,166 at the
+/// top fading into dark navy ~RGB 31,46,97 at the bottom) and a white glyph
+/// — here a "G" (ring open to the right with crossbar), supersampled 2x2.
+#[cfg(windows)]
+fn app_icon() -> tray_icon::Icon {
+    const SIZE: u32 = 32;
+    const BLUE_BRIGHT: [f64; 3] = [3.0, 80.0, 166.0];
+    const BLUE_DARK: [f64; 3] = [31.0, 46.0, 97.0];
+    let cx = 15.5;
+    let cy = 15.5;
+    let (r_out, r_in) = (10.0, 6.2);
+
+    // Rounded-square badge mask (corner radius 7) covering the full canvas.
+    let in_badge = |x: u32, y: u32| -> bool {
+        let fx = x as f64;
+        let fy = y as f64;
+        let dx = if fx < 7.0 {
+            7.0 - fx
+        } else if fx > 24.0 {
+            fx - 24.0
+        } else {
+            0.0
+        };
+        let dy = if fy < 7.0 {
+            7.0 - fy
+        } else if fy > 24.0 {
+            fy - 24.0
+        } else {
+            0.0
+        };
+        dx * dx + dy * dy <= 49.0
+    };
+    let is_bar = |x: f64, y: f64| (14.0..18.0).contains(&y) && (14.0..=23.0).contains(&x);
+    let is_stub = |x: f64, y: f64| (16.0..=23.0).contains(&y) && (19.0..=24.0).contains(&x);
+    let is_ring = |x: f64, y: f64| {
+        let r = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+        let deg = (y - cy).atan2(x - cx).to_degrees();
+        (r_in..=r_out).contains(&r) && !(-40.0..45.0).contains(&deg)
+    };
+
+    let mut rgba = vec![0u8; (SIZE * SIZE * 4) as usize];
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            // 2x2 supersampling for badge edges and the glyph.
+            let mut badge_cov = 0u32;
+            let mut glyph_cov = 0u32;
+            for sy in [0.25, 0.75] {
+                for sx in [0.25, 0.75] {
+                    let fx = x as f64 + sx;
+                    let fy = y as f64 + sy;
+                    if in_badge(x, y) {
+                        badge_cov += 1;
+                    }
+                    if is_bar(fx, fy) || is_stub(fx, fy) || is_ring(fx, fy) {
+                        glyph_cov += 1;
+                    }
+                }
+            }
+            if badge_cov == 0 && glyph_cov == 0 {
+                continue;
+            }
+            // Vertical gradient, bright blue at the top into dark navy below.
+            let t = y as f64 / (SIZE - 1) as f64;
+            let badge = [
+                BLUE_BRIGHT[0] + (BLUE_DARK[0] - BLUE_BRIGHT[0]) * t,
+                BLUE_BRIGHT[1] + (BLUE_DARK[1] - BLUE_BRIGHT[1]) * t,
+                BLUE_BRIGHT[2] + (BLUE_DARK[2] - BLUE_BRIGHT[2]) * t,
+            ];
+            let i = (y as usize * SIZE as usize + x as usize) * 4;
+            // White glyph (coverage ga) composited over the badge (alpha ba):
+            // out = white*ga + badge*ba*(1-ga); alpha = ga + ba*(1-ga).
+            let ga = glyph_cov as f64 / 4.0;
+            let ba = badge_cov as f64 / 4.0;
+            let out_a = ga + ba * (1.0 - ga);
+            if out_a <= 0.0 {
+                continue;
+            }
+            rgba[i] = ((255.0 * ga + badge[0] * ba * (1.0 - ga)) / out_a) as u8;
+            rgba[i + 1] = ((255.0 * ga + badge[1] * ba * (1.0 - ga)) / out_a) as u8;
+            rgba[i + 2] = ((255.0 * ga + badge[2] * ba * (1.0 - ga)) / out_a) as u8;
+            rgba[i + 3] = (out_a * 255.0) as u8;
+        }
+    }
+    tray_icon::Icon::from_rgba(rgba, SIZE, SIZE).expect("static RGBA icon data")
 }
 
 #[cfg(windows)]

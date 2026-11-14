@@ -6,6 +6,10 @@
 #                path in production. Created on start.
 #   [[workloads]]  one block per managed workload; omit for none.
 #
+# The service itself logs to C:/ProgramData/Guidance Runtime/logs/service.log
+# .<date> (daily rotation, JSON lines): workload lifecycle, spawn failures,
+# restart decisions. This location is fixed and independent of log_dir.
+#
 # Per workload:
 #   id           stable identifier, unique in this file (required).
 #   command      path of the executable to supervise (required).

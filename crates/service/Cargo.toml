@@ -7,6 +7,10 @@ license.workspace=true
 anyhow.workspace=true
 clap.workspace=true
 tokio.workspace=true
+tracing.workspace=true
+tracing-appender.workspace=true
 tracing-subscriber.workspace=true
 guidance-runtime={path="../runtime"}
 guidance-ipc={path="../ipc"}
+[target.'cfg(windows)'.dependencies]
+windows-service.workspace=true

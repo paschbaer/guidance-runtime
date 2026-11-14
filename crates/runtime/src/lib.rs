@@ -96,6 +96,13 @@ impl Runtime {
                 anyhow::bail!("duplicate workload {}", x.id)
             }
             let enabled = x.enabled;
+            tracing::info!(
+                workload = %x.id,
+                command = %x.command.display(),
+                enabled,
+                restart_policy = %x.restart.policy,
+                "workload configured"
+            );
             m.insert(
                 x.id.clone(),
                 Arc::new(Entry {
@@ -152,11 +159,22 @@ impl Runtime {
             return Ok(());
         }
         e.state.write().name = "Starting".into();
+        tracing::info!(workload = id, command = %e.cfg.command.display(), "starting workload");
         let path = self.log_dir.join(format!("{id}.log"));
-        let out = std::fs::OpenOptions::new()
+        let mut out = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(path)?;
+            .open(path)
+            .with_context(|| format!("open workload log for {id}"))?;
+        use std::io::Write;
+        let _ = writeln!(
+            out,
+            "--- started {} at {} ---",
+            id,
+            time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default()
+        );
         let err = out.try_clone()?;
         let mut c = Command::new(&e.cfg.command);
         c.args(&e.cfg.args)
@@ -169,6 +187,7 @@ impl Runtime {
         match c.spawn() {
             Ok(ch) => {
                 let pid = ch.id();
+                tracing::info!(workload = id, pid, "workload spawned");
                 *e.child.lock().await = Some(ch);
                 {
                     let mut s = e.state.write();
@@ -180,6 +199,7 @@ impl Runtime {
                 Ok(())
             }
             Err(x) => {
+                tracing::error!(workload = id, error = %x, "workload spawn failed");
                 let mut s = e.state.write();
                 s.name = "Failed".into();
                 s.error = Some(x.to_string());
@@ -199,6 +219,12 @@ impl Runtime {
             };
             *e.child.lock().await = None;
             let ok = status.map(|x| x.success()).unwrap_or(false);
+            tracing::info!(
+                workload = %e.cfg.id,
+                ok,
+                exit = ?status,
+                "workload exited"
+            );
             {
                 let mut s = e.state.write();
                 s.pid = None;
@@ -217,12 +243,24 @@ impl Runtime {
                     s.restarts
                 };
                 if n <= e.cfg.restart.max_attempts {
+                    tracing::warn!(
+                        workload = %e.cfg.id,
+                        attempt = n,
+                        max = e.cfg.restart.max_attempts,
+                        delay_seconds = e.cfg.restart.delay_seconds,
+                        "restarting workload"
+                    );
                     e.state.write().name = "Restarting".into();
                     sleep(Duration::from_secs(e.cfg.restart.delay_seconds)).await;
                     if *e.desired.read() {
                         let _ = rt.start(&e.cfg.id).await;
                     }
                 } else {
+                    tracing::error!(
+                        workload = %e.cfg.id,
+                        attempts = e.cfg.restart.max_attempts,
+                        "workload gave up after too many restarts"
+                    );
                     e.state.write().name = "Failed".into();
                 }
             }
@@ -230,6 +268,7 @@ impl Runtime {
     }
     pub async fn stop(&self, id: &str) -> Result<()> {
         let e = self.get(id)?;
+        tracing::info!(workload = id, "stopping workload");
         *e.desired.write() = false;
         e.state.write().name = "Stopping".into();
         let mut g = e.child.lock().await;

@@ -59,7 +59,7 @@ sc.exe start GuidanceRuntime
 
 In `cmd.exe`, the equivalent is `sc.exe create GuidanceRuntime binPath= "\"C:\Program Files\Guidance Runtime\guidance-service.exe\" --config \"C:\ProgramData\Guidance Runtime\config\runtime.toml\"" start= auto DisplayName= "Guidance Runtime Service". Verify with `sc.exe qc GuidanceRuntime`: `BINARY_PATH_NAME` must contain the quotes.
 
-Workloads and the log directory are maintained in `C:\ProgramData\Guidance Runtime\config\runtime.toml` (`log_dir`, `[[workloads]]`); restart the service after changing it.
+Workloads and the log directory are maintained in `C:\ProgramData\Guidance Runtime\config\runtime.toml` (`log_dir`, `[[workloads]]`); restart the service after changing it. Workload output lands in `<log_dir>\<workload-id>.log`; the service's own events (lifecycle, spawn failures, restart decisions) go to `C:\ProgramData\Guidance Runtime\logs\service.log.<date>` (daily rotation, JSON), independent of `log_dir`.
 
 ### 3. Configure the self-updater
 

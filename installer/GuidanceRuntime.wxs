@@ -43,6 +43,7 @@
       <ComponentRef Id="RuntimeConfigExample" />
       <ComponentRef Id="UpdatesConfigExample" />
       <ComponentRef Id="LogsDir" />
+      <ComponentRef Id="TrayStartupShortcut" />
     </Feature>
 
     <StandardDirectory Id="ProgramFiles64Folder">
@@ -97,6 +98,28 @@
           </Component>
         </Directory>
       </Directory>
+    </StandardDirectory>
+
+    <!-- Per-user autostart for the tray (the service runs in session 0 and
+         cannot launch UI). WiX v7 has no common-startup standard folder, so
+         the shortcut lands in the INSTALLING user's Startup folder; other
+         users can start the tray manually or copy the shortcut. Uninstall
+         removes the component, deleting the shortcut and its key-path
+         registry value automatically. -->
+    <StandardDirectory Id="StartupFolder">
+      <Component Id="TrayStartupShortcut" Guid="B7E4D6A3-52F1-4C8E-9A07-3D6B1E92C4F5">
+        <Shortcut Id="GuidanceTrayStartup"
+                  Name="Guidance Runtime Tray"
+                  Description="Starts the Guidance Runtime tray icon."
+                  Target="[INSTALLFOLDER]guidance-tray.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\Guidance\GuidanceRuntimeTrayShortcut"
+                       Name="installed"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
     </StandardDirectory>
 
     <!-- Standard wizard UI (v4+ consumer API; the WIXUI_INSTALLDIR property +
